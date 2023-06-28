@@ -18,9 +18,9 @@ if 'DEBUG_EXT' in os.environ:
   debug = True if os.environ['DEBUG_EXT'] == '1' else False
 extra_args = ['-fopenmp',
               '-march=native']
-llmdnn_lib_dir = f'{os.getcwd()}/../../../../../../../../bin/intel64/Release'
+cpu_extensions_lib_dir = f'{os.getcwd()}/../../../build/lib'
 if debug:
-  llmdnn_lib_dir = f'{os.getcwd()}/../../../../../../../../bin/intel64/Debug'
+  cpu_extensions_lib_dir = f'{os.getcwd()}/../../../build/lib'
   extra_args += ['-g', '-O0']
   print('install debug version')
 else:
@@ -40,8 +40,8 @@ setup(name='llmdnn',
                         f'{os.getcwd()}/../../../include',
                         f'{os.getcwd()}/../../../src'],
           library_dirs=[f'{sys.prefix}/lib',
-                        llmdnn_lib_dir],
-          libraries=['llmdnn',
+                        cpu_extensions_lib_dir],
+          libraries=['cpu_extensions',
                      'stdc++']),
       ],
       cmdclass={'build_ext': cpp_extension.BuildExtension}
