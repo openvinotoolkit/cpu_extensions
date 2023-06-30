@@ -118,7 +118,7 @@ void mha_gpt_impl_amx::mha_bf16(const mha_gpt::exec_param &param) {
     auto& gemAvB_ops = gemAvB_BF16xBF16;
     auto& qKtrGemm_ops = qKtrGemm_BF16xBF16;
     auto& qKVGemm_ops = qKVGemm_BF16xBF16;
-    bool is_vector = param.query_seq_len == 1;
+    bool is_vector = param.query_seq_len == 1 && _create_param.head_size >= 32 && _create_param.head_size <= 32 * 6;
     size_t head_stride_in_q = _create_param.head_size_aligned * param.query_seq_len;
     size_t batch_stride_in_q = head_stride_in_q * _create_param.num_heads;
     size_t head_stride_in_attn = _create_param.head_size;
@@ -246,7 +246,7 @@ void mha_gpt_impl_amx::mha_i8(const mha_gpt::exec_param &param) {
     auto& gemAvB_ops = gemAvB_i8xi8;
     auto& qKtrGemm_ops = qKtrGemm_i8xi8;
     auto& qKVGemm_ops = qKVGemm_u8xi8;
-    bool is_vector = param.query_seq_len == 1;
+    bool is_vector = param.query_seq_len == 1 && _create_param.head_size >= 64 && _create_param.head_size <= 64 * 6;
     // dequant param
     auto mul_scales = _create_param.normal_factor * param.q_dequant * param.k_dequant;
     // prepare for per channel
