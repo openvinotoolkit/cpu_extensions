@@ -24,9 +24,8 @@ public:
         // supported (qkv, dst): (bf16, bf16)
         llmdnn::data_type_t qkv_precision;
         llmdnn::data_type_t dst_precision;
-        size_t rotary_emb_base;
+        size_t rotary_dims;
         float normal_factor;
-        float rotary_pct;
         bool use_position2d;
     };
     struct exec_param {
@@ -43,6 +42,8 @@ public:
                                             //      [batch, 1, query_seq_len, key_seq_len], when is_causal_in_attention is true
         uint8_t* attn_output;
         size_t head_stride_in_kv;
+        float* cos;
+        float* sin;
     };
 
     attn_gpt();
@@ -70,9 +71,7 @@ bool attn_gpt::create(const attn_gpt::create_param& param) {
     emb_param.head_size_aligned = param.head_size_aligned;
     emb_param.qkv_precision = param.qkv_precision;
     emb_param.dst_precision = param.dst_precision;
-    emb_param.max_seq_len = param.max_seq_len;
-    emb_param.rotary_emb_base = param.rotary_emb_base;
-    emb_param.rotary_pct = param.rotary_pct;
+    emb_param.rotary_dims = param.rotary_dims;
     emb_param.use_position2d = param.use_position2d;
 
     if (!_emb_gpt->create(emb_param))
@@ -112,6 +111,8 @@ void attn_gpt::exec(const attn_gpt::exec_param& param) {
     emb_param.layer_past_value_dst = param.layer_past_value_dst;
     emb_param.position2d_ids = param.position2d_ids;
     emb_param.head_stride_in_kv = param.head_stride_in_kv;
+    emb_param.cos = param.cos;
+    emb_param.sin = param.sin;
     _emb_gpt->exec(emb_param);
 
     llmdnn::mha_gpt::exec_param mha_param;
@@ -139,8 +140,7 @@ void regclass_attn_gpt(pybind11::module m) {
         const std::string qkv_precision_name,
         const std::string dst_precision_name,
         const size_t max_seq_len,
-        const size_t rotary_emb_base,
-        float rotary_pct,
+        const size_t rotary_dims,
         bool use_position2d) {
             attn_gpt::create_param param;
             param.num_heads = num_heads;
@@ -150,8 +150,7 @@ void regclass_attn_gpt(pybind11::module m) {
             param.qkv_precision = llmdnn::get_dt_from_str(qkv_precision_name);
             param.dst_precision = llmdnn::get_dt_from_str(dst_precision_name);
             param.max_seq_len = max_seq_len;
-            param.rotary_emb_base = rotary_emb_base;
-            param.rotary_pct = rotary_pct;
+            param.rotary_dims = rotary_dims;
             param.use_position2d = use_position2d;
             if (param.qkv_precision == llmdnn::dnnl_data_type_undef)
                 throw pybind11::type_error("Incorrect qkv type " + qkv_precision_name);
@@ -167,8 +166,7 @@ void regclass_attn_gpt(pybind11::module m) {
         py::arg("qkv_precision_name"),
         py::arg("dst_precision_name"),
         py::arg("max_seq_len"),
-        py::arg("rotary_emb_base"),
-        py::arg("rotary_pct"),
+        py::arg("rotary_dims"),
         py::arg("use_position2d") = false,
         R"(
             Create emb
@@ -177,7 +175,8 @@ void regclass_attn_gpt(pybind11::module m) {
             :type num_heads: int
         )");
     cls.def("exec_position", [] (attn_gpt& self, const torch::Tensor& qkv, const torch::Tensor& layer_past_key_dst,
-        const torch::Tensor& layer_past_value_dst, int64_t past_seq_len, const torch::Tensor& attn_mask, const torch::Tensor& position2d_ids) {
+        const torch::Tensor& layer_past_value_dst, int64_t past_seq_len, const torch::Tensor& attn_mask,
+        const torch::Tensor& position2d_ids, const torch::Tensor& cos, const torch::Tensor& sin) {
             // qkv: [batch, seq_len, (num_heads * 3 * head_size)]
             // layer_past_padded: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
             // past_seq_len: past_seq_len==layer_past.shape[-2]
@@ -213,6 +212,8 @@ void regclass_attn_gpt(pybind11::module m) {
             param.head_stride_in_kv = max_seq_len * head_size_aligned;
             auto out = qkv.new_empty({batch, query_seq_len, num_heads * head_size});
             param.attn_output = reinterpret_cast<uint8_t*>(out.data_ptr());
+            param.cos = reinterpret_cast<float*>(cos.data_ptr());
+            param.sin = reinterpret_cast<float*>(sin.data_ptr());
 
             self.exec(param);
 
@@ -226,6 +227,8 @@ void regclass_attn_gpt(pybind11::module m) {
         py::arg("past_seq_len"),
         py::arg("attn_mask"),
         py::arg("position2d_ids"),
+        py::arg("cos"),
+        py::arg("sin"),
         R"(
             exec emb
 

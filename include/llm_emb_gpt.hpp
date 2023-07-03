@@ -17,12 +17,10 @@ public:
         size_t num_heads;
         size_t head_size;
         size_t head_size_aligned;       // better to aligned to 64 bytes for best performance, apply for qkv
-        size_t max_seq_len;             // max seq length for computing the size of matmul tmp result
         // supported (qkv, dst): (bf16, bf16)
         data_type_t qkv_precision;
         data_type_t dst_precision;
-        size_t rotary_emb_base;
-        float rotary_pct;
+        size_t rotary_dims;
         bool use_position2d;            // chatglm true, other false
     };
     struct exec_param {
@@ -35,6 +33,8 @@ public:
         uint8_t** layer_past_value_src;     // past value src
         uint8_t** layer_past_key_dst;       // past key dst, if layer_past_key_src!=layer_past_key_dst, will copy layer_past_key_src to layer_past_key_dst
         uint8_t** layer_past_value_dst;     // past value dst, if layer_past_value!=layer_past_value_dst, will copy layer_past_value to layer_past_value_dst
+        float* cos;                         // cos table
+        float* sin;                         // sin table
         int* position2d_ids;                // shape: [batch, 2, query_seq_len]
         size_t head_stride_in_kv;           // kv stride for next head; kv may be preallocated a big buffer
     };

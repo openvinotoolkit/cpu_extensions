@@ -257,8 +257,24 @@ class GPTNeoXAttentionExt:
 
         qkv_precision_name = 's8' if is_int8 else 'bf16'
         dst_precision_name = 's8' if is_int8 else 'bf16'
+        rotary_ndims = int(head_size * rotary_pct)
         self.emd.create(num_heads, head_size, head_size_aligned, qkv_precision_name,
-                dst_precision_name, max_seq_len, rotary_emb_base, rotary_pct, True)
+                dst_precision_name, rotary_ndims, True)
+
+        inv_freq = 1. / (rotary_emb_base ** (torch.arange(0, rotary_ndims, 2).float() / rotary_ndims))
+        #inv_freq = inv_freq.half()
+        self.max_seq_len_cached = None
+        self.cos_cached = None
+        self.sin_cached = None
+        # use f32 to pass accuracy test
+        # Build here to make `torch.jit.trace` work.
+        self.max_seq_len_cached = max_position_embeddings
+        t = torch.arange(self.max_seq_len_cached, device=inv_freq.device, dtype=inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, inv_freq)
+        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.cos_cached = emb.cos()[:, None, :]
+        self.sin_cached = emb.sin()[:, None, :]
 
     # qkv: [batch, seq_len, (num_heads * 3 * head_size)]
     # layer_past_padded: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
@@ -269,7 +285,7 @@ class GPTNeoXAttentionExt:
     #       2: k: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
     #       3: v: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
     def forward(self, qkv, layer_past_key_src, layer_past_value_src, layer_past_key_dst, layer_past_value_dst, query_padded, past_seq_len, position_ids):
-        self.emd.exec_position(qkv, layer_past_key_src, layer_past_value_src, layer_past_key_dst, layer_past_value_dst, query_padded, past_seq_len, position_ids)
+        self.emd.exec_position(qkv, layer_past_key_src, layer_past_value_src, layer_past_key_dst, layer_past_value_dst, query_padded, past_seq_len, position_ids, self.cos_cached, self.sin_cached)
 
 
 HEAD_NUM = 32

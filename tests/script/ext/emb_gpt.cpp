@@ -22,9 +22,7 @@ void regclass_emb_gpt(pybind11::module m) {
         const size_t head_size_aligned,
         const std::string qkv_precision_name,
         const std::string dst_precision_name,
-        const size_t max_seq_len,
-        const size_t rotary_emb_base,
-        float rotary_pct,
+        const size_t rotary_dims,
         bool use_position2d) {
             llmdnn::emb_gpt::create_param param;
             param.num_heads = num_heads;
@@ -32,9 +30,7 @@ void regclass_emb_gpt(pybind11::module m) {
             param.head_size_aligned = head_size_aligned;
             param.qkv_precision = llmdnn::get_dt_from_str(qkv_precision_name);
             param.dst_precision = llmdnn::get_dt_from_str(dst_precision_name);
-            param.max_seq_len = max_seq_len;
-            param.rotary_emb_base = rotary_emb_base;
-            param.rotary_pct = rotary_pct;
+            param.rotary_dims = rotary_dims;
             param.use_position2d = use_position2d;
             if (param.qkv_precision == llmdnn::dnnl_data_type_undef)
                 throw pybind11::type_error("Incorrect qkv type " + qkv_precision_name);
@@ -48,9 +44,7 @@ void regclass_emb_gpt(pybind11::module m) {
         py::arg("head_size_aligned"),
         py::arg("qkv_precision_name"),
         py::arg("dst_precision_name"),
-        py::arg("max_seq_len"),
-        py::arg("rotary_emb_base"),
-        py::arg("rotary_pct"),
+        py::arg("rotary_dims"),
         py::arg("use_position2d") = false,
         R"(
             Create emb
@@ -60,7 +54,7 @@ void regclass_emb_gpt(pybind11::module m) {
         )");
     // torch::List
     cls.def("exec", [] (llmdnn::emb_gpt& self, const torch::Tensor& qkv, const torch::Tensor& layer_past_key_dst,
-        const torch::Tensor& layer_past_value_dst, const torch::Tensor& query_padded, int64_t past_seq_len) {
+        const torch::Tensor& layer_past_value_dst, const torch::Tensor& query_padded, int64_t past_seq_len, const torch::Tensor& cos, const torch::Tensor& sin) {
             // qkv: [batch, seq_len, (num_heads * 3 * head_size)]
             // layer_past_padded: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
             // past_seq_len: past_seq_len==layer_past.shape[-2]
@@ -92,6 +86,8 @@ void regclass_emb_gpt(pybind11::module m) {
             param.layer_past_key_dst = param.layer_past_key_src;
             param.layer_past_value_dst = param.layer_past_value_src;
             param.head_stride_in_kv = max_seq_len * head_size_aligned;
+            param.cos = reinterpret_cast<float*>(cos.data_ptr());
+            param.sin = reinterpret_cast<float*>(sin.data_ptr());
             for (int i = 0; i < batch; i++) {
                 param.layer_past_key_src[i] = reinterpret_cast<uint8_t*>(layer_past_key_dst[i].data_ptr());
                 param.layer_past_value_src[i] = reinterpret_cast<uint8_t*>(layer_past_value_dst[i].data_ptr());
@@ -107,6 +103,8 @@ void regclass_emb_gpt(pybind11::module m) {
         py::arg("layer_past_value_dst"),
         py::arg("query_padded"),
         py::arg("past_seq_len"),
+        py::arg("cos"),
+        py::arg("sin"),
         R"(
             exec emb
 
@@ -114,7 +112,7 @@ void regclass_emb_gpt(pybind11::module m) {
             :type num_heads: int
         )");
     cls.def("exec_position", [] (llmdnn::emb_gpt& self, const torch::Tensor& qkv, const torch::Tensor& layer_past_key_src, const torch::Tensor& layer_past_value_src,
-        const torch::Tensor& layer_past_key_dst, const torch::Tensor& layer_past_value_dst, const torch::Tensor& query_padded, int64_t past_seq_len, const torch::Tensor position2d_ids) {
+        const torch::Tensor& layer_past_key_dst, const torch::Tensor& layer_past_value_dst, const torch::Tensor& query_padded, int64_t past_seq_len, const torch::Tensor position2d_ids, const torch::Tensor& cos, const torch::Tensor& sin) {
             // qkv: [batch, seq_len, (num_heads * 3 * head_size)]
             // layer_past_padded: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
             // past_seq_len: past_seq_len==layer_past.shape[-2]
@@ -146,6 +144,8 @@ void regclass_emb_gpt(pybind11::module m) {
             param.layer_past_key_dst = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
             param.layer_past_value_dst = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
             param.head_stride_in_kv = max_seq_len * head_size_aligned;
+            param.cos = reinterpret_cast<float*>(cos.data_ptr());
+            param.sin = reinterpret_cast<float*>(sin.data_ptr());
             for (int i = 0; i < batch; i++) {
                 param.layer_past_key_src[i] = past_seq_len == 0 ? nullptr : reinterpret_cast<uint8_t*>(layer_past_key_src[i].data_ptr());
                 param.layer_past_value_src[i] = past_seq_len == 0 ? nullptr : reinterpret_cast<uint8_t*>(layer_past_value_src[i].data_ptr());
@@ -167,6 +167,8 @@ void regclass_emb_gpt(pybind11::module m) {
         py::arg("query_padded"),
         py::arg("past_seq_len"),
         py::arg("position2d_ids"),
+        py::arg("cos"),
+        py::arg("sin"),
         R"(
             exec emb
 

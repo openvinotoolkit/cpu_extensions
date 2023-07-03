@@ -419,11 +419,22 @@ class SelfAttention(torch.nn.Module):
         self.head_size_aligned = (head_size + 31) // 32 * 32
         self.max_sequence_length = max_sequence_length
         normal_factor = 1.0 / math.sqrt(head_size)
+        rotary_ndims = int(head_size * 0.5)
         self.attn.create(num_attention_heads, head_size, self.head_size_aligned,
-                         normal_factor, 'bf16', 'bf16', max_sequence_length, 10000, 0.5, True)
+                         normal_factor, 'bf16', 'bf16', max_sequence_length, rotary_ndims, True)
         self.layer_past_key_padded = None
         self.layer_past_value_padded = None
         self.past_seq_len = 0
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, rotary_ndims, 2).float() / rotary_ndims))
+
+        # Build here to make `torch.jit.trace` work.
+        self.max_seq_len_cached = max_sequence_length
+        t = torch.arange(self.max_seq_len_cached, device=inv_freq.device, dtype=inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, inv_freq)
+        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.cos_cached = emb.cos()[None, None, :, :]
+        self.sin_cached = emb.sin()[None, None, :, :]
 
     @staticmethod
     def attention_mask_func(attention_scores, attention_mask):
@@ -474,7 +485,7 @@ class SelfAttention(torch.nn.Module):
             self.layer_past_value_padded = torch.zeros(shape, dtype=torch.bfloat16)
         if layer_past is None:
             self.past_seq_len = 0
-        context_layer = self.attn.exec_position(mixed_raw_layer, self.layer_past_key_padded, self.layer_past_value_padded, self.past_seq_len, attention_mask, position_ids)
+        context_layer = self.attn.exec_position(mixed_raw_layer, self.layer_past_key_padded, self.layer_past_value_padded, self.past_seq_len, attention_mask, position_ids, self.cos_cached, self.sin_cached)
         present = (self.layer_past_key_padded, self.layer_past_value_padded)
         attention_probs = None
         self.past_seq_len += mixed_raw_layer.size(1)
