@@ -27,14 +27,19 @@ public:
         size_t batch;
         size_t query_seq_len;
         size_t past_seq_len;
-        uint8_t* qkv;                       // shape: [batch, query_seq_len, 3 * hidden size]
+        uint8_t* q;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldq
+        uint8_t* k;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldk
+        uint8_t* v;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldv
+        size_t ldq;                         // inner stride of q
+        size_t ldk;                         // inner stride of k
+        size_t ldv;                         // inner stride of v
         uint8_t* query_dst;                 // rotary embbeding dst
         uint8_t** layer_past_key_src;       // past key src
         uint8_t** layer_past_value_src;     // past value src
         uint8_t** layer_past_key_dst;       // past key dst, if layer_past_key_src!=layer_past_key_dst, will copy layer_past_key_src to layer_past_key_dst
         uint8_t** layer_past_value_dst;     // past value dst, if layer_past_value!=layer_past_value_dst, will copy layer_past_value to layer_past_value_dst
-        float* cos;                         // cos table
-        float* sin;                         // sin table
+        float* cos;                         // cos lookup table, shape: [max_seq_len, rotary_dims]
+        float* sin;                         // sin lookup table, shape: [max_seq_len, rotary_dims]
         int* position2d_ids;                // shape: [batch, 2, query_seq_len]
         size_t head_stride_in_kv;           // kv stride for next head; kv may be preallocated a big buffer
     };

@@ -79,7 +79,10 @@ void regclass_emb_gpt(pybind11::module m) {
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.past_seq_len = past_seq_len;
-            param.qkv = reinterpret_cast<uint8_t*>(qkv.data_ptr());
+            param.q = reinterpret_cast<uint8_t*>(qkv.data_ptr());
+            param.k = param.q + head_size * sizeof(ov::bfloat16);
+            param.v = param.k + head_size * sizeof(ov::bfloat16);
+            param.ldq = param.ldk = param.ldv = head_size * 3;
             param.query_dst = reinterpret_cast<uint8_t*>(query_padded.data_ptr());
             param.layer_past_key_src = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
             param.layer_past_value_src = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
@@ -137,7 +140,10 @@ void regclass_emb_gpt(pybind11::module m) {
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.past_seq_len = past_seq_len;
-            param.qkv = reinterpret_cast<uint8_t*>(qkv.data_ptr());
+            param.q = reinterpret_cast<uint8_t*>(qkv.data_ptr());
+            param.k = param.q + head_size * sizeof(ov::bfloat16);
+            param.v = param.k + head_size * sizeof(ov::bfloat16);
+            param.ldq = param.ldk = param.ldv = head_size * 3;
             param.query_dst = reinterpret_cast<uint8_t*>(query_padded.data_ptr());
             param.layer_past_key_src = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
             param.layer_past_value_src = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));

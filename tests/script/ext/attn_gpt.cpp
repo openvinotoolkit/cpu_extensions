@@ -33,7 +33,12 @@ public:
         size_t query_seq_len;
         size_t past_seq_len;
         bool is_causal_in_attention;        // causal mask is fused in attention mask: chatglm uses it.
-        uint8_t* qkv;
+        uint8_t* q;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldq
+        uint8_t* k;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldk
+        uint8_t* v;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldv
+        size_t ldq;                         // inner stride of q
+        size_t ldk;                         // inner stride of k
+        size_t ldv;                         // inner stride of v
         uint8_t** layer_past_key_dst;
         uint8_t** layer_past_value_dst;
         int* position2d_ids;                // shape: [batch, 2, query_seq_len]
@@ -103,7 +108,12 @@ void attn_gpt::exec(const attn_gpt::exec_param& param) {
     emb_param.batch = param.batch;
     emb_param.query_seq_len = param.query_seq_len;
     emb_param.past_seq_len = param.past_seq_len;
-    emb_param.qkv = param.qkv;
+    emb_param.q = param.q;
+    emb_param.k = param.k;
+    emb_param.v = param.v;
+    emb_param.ldq = param.ldq;
+    emb_param.ldk = param.ldk;
+    emb_param.ldv = param.ldv;
     emb_param.query_dst = _query_dst.get();
     emb_param.layer_past_key_src = param.layer_past_key_dst;
     emb_param.layer_past_value_src = param.layer_past_value_dst;
@@ -198,7 +208,10 @@ void regclass_attn_gpt(pybind11::module m) {
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.past_seq_len = past_seq_len;
-            param.qkv = reinterpret_cast<uint8_t*>(qkv.data_ptr());
+            param.q = reinterpret_cast<uint8_t*>(qkv.data_ptr());
+            param.k = param.q + head_size * sizeof(ov::bfloat16);
+            param.v = param.k + head_size * sizeof(ov::bfloat16);
+            param.ldq = param.ldk = param.ldv = head_size * 3;
             param.layer_past_key_dst = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
             param.layer_past_value_dst = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
             for (int i = 0; i < batch; i++) {
