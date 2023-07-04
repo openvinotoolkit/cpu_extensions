@@ -94,8 +94,6 @@ struct tensor2D {
         stride = d1 * sizeof(T);
         if ((stride % 64) && (!force_compact)) {
             auto stride_fix = rndup(stride, 64);
-            std::cout << "\tWarnning: stride " << stride << " is not aligned to cache line, will increase to " << stride_fix
-                      << " (" << stride_fix/64 << " cache lines)\n";
             stride = stride_fix;
         }
         padded_dim1 = stride / sizeof(T);

@@ -38,13 +38,13 @@ struct fc_kernel {
 using supported_key = std::tuple<data_type_t, data_type_t, data_type_t>;
 using supported_value = std::pair<size_t, size_t>;
 static std::map<supported_key, supported_value> supported_postops = {
-    { { dnnl_s8, dnnl_s8, dnnl_s8 }, { DEQUANT | QUANT, BIAS | GELU } },
-    { { dnnl_s8, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU } },
-    { { dnnl_s8, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU } },
-    { { dnnl_bf16, dnnl_bf16, dnnl_bf16 }, { 0, BIAS | GELU } },
-    { { dnnl_bf16, dnnl_bf16, dnnl_f32 }, { 0, BIAS | GELU } },
-    { { dnnl_bf16, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU } },
-    { { dnnl_bf16, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU } },
+    { { dnnl_s8, dnnl_s8, dnnl_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
+    { { dnnl_s8, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+    { { dnnl_s8, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+    { { dnnl_bf16, dnnl_bf16, dnnl_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
+    { { dnnl_bf16, dnnl_bf16, dnnl_f32 }, { 0, BIAS | GELU | GELU_TANH } },
+    { { dnnl_bf16, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+    { { dnnl_bf16, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
 };
 
 static bool check_valid_postops(size_t value, data_type_t dt_a, data_type_t dt_b, data_type_t dt_c) {
@@ -135,6 +135,11 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     ppkernel.set_deq_scale(dq);
                     ppkernel.set_q_scale(q);
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_GELU_TANH_QUANT> ppkernel(c);
+                    ppkernel.set_deq_scale(dq);
+                    ppkernel.set_q_scale(q);
+                    (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_QUANT> ppkernel(c);
                     ppkernel.set_deq_scale(dq);
@@ -144,6 +149,11 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_QUANT> ppkernel(c, bias);
+                    ppkernel.set_deq_scale(dq);
+                    ppkernel.set_q_scale(q);
+                    (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_TANH_QUANT> ppkernel(c, bias);
                     ppkernel.set_deq_scale(dq);
                     ppkernel.set_q_scale(q);
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
@@ -161,6 +171,10 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(c);
                     ppkernel.set_deq_scale(dq);
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_GELU_TANH> ppkernel(c);
+                    ppkernel.set_deq_scale(dq);
+                    (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT> ppkernel(c);
                     ppkernel.set_deq_scale(dq);
@@ -169,6 +183,10 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(c, bias);
+                    ppkernel.set_deq_scale(dq);
+                    (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_TANH> ppkernel(c, bias);
                     ppkernel.set_deq_scale(dq);
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
@@ -184,6 +202,10 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(c);
                     ppkernel.set_deq_scale(dq);
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_GELU_TANH> ppkernel(c);
+                    ppkernel.set_deq_scale(dq);
+                    (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT> ppkernel(c);
                     ppkernel.set_deq_scale(dq);
@@ -192,6 +214,10 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(c, bias);
+                    ppkernel.set_deq_scale(dq);
+                    (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_TANH> ppkernel(c, bias);
                     ppkernel.set_deq_scale(dq);
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
@@ -217,6 +243,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::GELU> ppkernel(c);
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::GELU_TANH> ppkernel(c);
+                    (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::NONE> ppkernel(c);
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
@@ -224,6 +253,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS_GELU> ppkernel(c, bias);
+                    (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS_GELU_TANH> ppkernel(c, bias);
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS> ppkernel(c, bias);
@@ -236,6 +268,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::GELU> ppkernel(c);
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::GELU_TANH> ppkernel(c);
+                    (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> ppkernel(c);
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
@@ -243,6 +278,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS_GELU> ppkernel(c, bias);
+                    (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS_GELU_TANH> ppkernel(c, bias);
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS> ppkernel(c, bias);
@@ -260,6 +298,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(c);
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::DEQUANT_GELU_TANH> ppkernel(c);
+                    (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::DEQUANT> ppkernel(c);
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
@@ -267,6 +308,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(c, bias);
+                    (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_TANH> ppkernel(c, bias);
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS> ppkernel(c, bias);
@@ -279,6 +323,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(c);
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_GELU_TANH> ppkernel(c);
+                    (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT> ppkernel(c);
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
@@ -286,6 +333,9 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
             } else {
                 if (mm->postops_type & GELU) {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(c, bias);
+                    (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
+                } else if (mm->postops_type & GELU_TANH) {
+                    amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_TANH> ppkernel(c, bias);
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
                 } else {
                     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS> ppkernel(c, bias);

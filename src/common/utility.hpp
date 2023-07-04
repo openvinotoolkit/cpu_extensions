@@ -12,6 +12,16 @@
 #include <string>
 #include "llm_types.hpp"
 
+#ifndef OV_DECL_ALIGNED
+#  ifdef __GNUC__
+#    define OV_DECL_ALIGNED(x) __attribute__ ((aligned (x)))
+#  elif defined _MSC_VER
+#    define OV_DECL_ALIGNED(x) __declspec(align(x))
+#  else
+#    define OV_DECL_ALIGNED(x)
+#  endif
+#endif // OV_DECL_ALIGNED
+
 namespace llmdnn {
 
 inline size_t get_precision_size(data_type_t type) {

@@ -12,8 +12,10 @@ typedef enum {
     NONE = 0,
     DEQUANT = 1 << 0,
     BIAS = 1 << 1,
-    GELU = 1 << 2,
-    QUANT = 1 << 3,
+    GELU_ERF = 1 << 2,
+    GELU_TANH = 1 << 3,
+    QUANT = 1 << 4,
+    GELU = GELU_ERF,        // default is ERF
 
     BIAS_GELU = BIAS | GELU,
     DEQUANT_BIAS_GELU = DEQUANT | BIAS_GELU,
@@ -23,7 +25,14 @@ typedef enum {
     DEQUANT_QUANT = DEQUANT | QUANT,
 
     DEQUANT_GELU = DEQUANT | GELU,
-    DEQUANT_BIAS = DEQUANT | BIAS
+    DEQUANT_BIAS = DEQUANT | BIAS,
+
+    BIAS_GELU_TANH = BIAS | GELU_TANH,
+    DEQUANT_BIAS_GELU_TANH = DEQUANT | BIAS_GELU_TANH,
+    DEQUANT_BIAS_GELU_TANH_QUANT = DEQUANT_BIAS_GELU_TANH | QUANT,
+    DEQUANT_GELU_TANH_QUANT = DEQUANT | GELU_TANH | QUANT,
+    
+    DEQUANT_GELU_TANH = DEQUANT | GELU_TANH,
 } postops_types;
 
 struct fc_create_param {

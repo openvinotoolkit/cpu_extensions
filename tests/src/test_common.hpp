@@ -212,6 +212,8 @@ inline std::ostream & operator<<(std::ostream & os, const llmdnn::postops_types 
         os << "_BIAS";
     if (steps & llmdnn::GELU)
         os << "_GELU";
+    if (steps & llmdnn::GELU_TANH)
+        os << "_GELU_TANH";
     if (steps & llmdnn::QUANT)
         os << "_QUANT";
     return os;

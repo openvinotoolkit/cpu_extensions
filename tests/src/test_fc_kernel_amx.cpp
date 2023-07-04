@@ -46,6 +46,7 @@ public:
         result << "A_" << dtype_to_str(dt_a) << "_B_" << dtype_to_str(dt_b)
                << "_C_" << dtype_to_str(dt_c) << (is_transpose ? "_transpose" : "")
                << "_postops_" << postops_type << "_M_" << M << "_N_" << N << "_K_" << K;
+        printf("%s\n", result.str().c_str());
         return result.str();
     }
 
@@ -116,6 +117,11 @@ protected:
                 return x * 0.5 * (1 + std::erf(x / std::sqrt(2)));
             };
         }
+        if (_postops_type & GELU_TANH) {
+            act = [] (float x) {
+                return 0.5f * x * (1.0f + std::tanh(std::sqrt(2.0f / 3.1415926f) * x * (1 + 0.044715f * x * x)));
+            };
+        }
 
         matmul(A, B, C_Ref, ptr_dq, ptr_bias, act, ptr_q);
         float thresh = 0.0001f;
@@ -165,22 +171,32 @@ const std::vector<FCKernelTestDTPost> types = {
     { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_BIAS_QUANT },
     { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_GELU_QUANT },
     { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_BIAS_GELU_QUANT },
+    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_GELU_TANH_QUANT },
+    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_BIAS_GELU_TANH_QUANT },
     { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT },
     { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_BIAS },
     { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_GELU },
     { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_BIAS_GELU },
+    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_GELU_TANH },
+    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_BIAS_GELU_TANH },
     { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT },
     { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_BIAS },
     { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_GELU },
     { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_BIAS_GELU },
+    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_GELU_TANH },
+    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_BIAS_GELU_TANH },
     { dnnl_bf16, dnnl_bf16, dnnl_bf16, NONE },
     { dnnl_bf16, dnnl_bf16, dnnl_bf16, BIAS },
     { dnnl_bf16, dnnl_bf16, dnnl_bf16, GELU },
     { dnnl_bf16, dnnl_bf16, dnnl_bf16, BIAS_GELU },
+    { dnnl_bf16, dnnl_bf16, dnnl_bf16, GELU_TANH },
+    { dnnl_bf16, dnnl_bf16, dnnl_bf16, BIAS_GELU_TANH },
     { dnnl_bf16, dnnl_bf16, dnnl_f32, NONE },
     { dnnl_bf16, dnnl_bf16, dnnl_f32, BIAS },
     { dnnl_bf16, dnnl_bf16, dnnl_f32, GELU },
     { dnnl_bf16, dnnl_bf16, dnnl_f32, BIAS_GELU },
+    { dnnl_bf16, dnnl_bf16, dnnl_f32, GELU_TANH },
+    { dnnl_bf16, dnnl_bf16, dnnl_f32, BIAS_GELU_TANH },
     // TODO: support weight compression
     // { dnnl_bf16, dnnl_s8, dnnl_f32, DEQUANT },
     // { dnnl_bf16, dnnl_s8, dnnl_f32, DEQUANT_BIAS },

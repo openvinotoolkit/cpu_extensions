@@ -7,6 +7,8 @@
 #include "common/bf16.hpp"
 #include "common/tensor2d.hpp"
 #include "utility_kernel_amx.hpp"
+#include "gelu_kernel_avx512.hpp"
+#include "llm_fc.hpp"
 
 #ifdef _WIN32
 #include <intrin.h>
@@ -17,6 +19,8 @@
 #ifdef ENABLE_NUMA
 #include "numa.h"
 #endif
+
+using namespace llmdnn;
 
 namespace amx_kernel {
 
@@ -818,57 +822,6 @@ namespace functional {
         _mm512_storeu_epi32(dst + 15*16, rf);
     }
 
-    // gelu_erf_minimax_approx_compute_vector_fwd in oneDNN
-    //   x*0.5*(1+erf(x/sqrt(2))) = x*0.5*(1 + x*Polynomial(x^2))
-    inline __m512 gelu_erf_minmax_approx(__m512 & x) {
-        auto x2 = _mm512_mul_ps(x, x); // x^2
-        
-        auto x_positive = _mm512_castsi512_ps(_mm512_and_epi32(_mm512_castps_si512(x), _mm512_set1_epi32(0x7FFFFFFF)));    // clear sign mask
-        auto x_half = _mm512_mul_ps(x, _mm512_set1_ps(0.5f));
-
-        auto poly = _mm512_castsi512_ps(_mm512_set1_epi32(0x1f1c83fd));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xa3198977))); // poly * x^2 + xxx
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x268a7927)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xa998c963)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x2c67ddb2)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xaf013b2c)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x315d4a4f)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xb3969b11)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x35a776e9)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xb79b0914)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x3970b255)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xbb1b7399)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x3ca3621f)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0xbe082bc7)));
-        poly = _mm512_fmadd_ps(poly, x2, _mm512_castsi512_ps(_mm512_set1_epi32(0x3f4c4228)));
-
-        // 1.0f + erf(x * inv_sqrt2) = 1.0f + x * P(x^2)
-        poly = _mm512_fmadd_ps(poly, x, _mm512_set1_ps(1.0f));
-        // x*0.5*(1 + x*Polynomial(x^2))
-        poly = _mm512_mul_ps(poly, x_half);
-
-        // combine:
-        // zone_id
-        //  1 -inf; -saturation_lbound           : 0.0f
-        //  2 -saturation_lbound; -linear_ubound : x*0.5*(1 + x*Polynomial(x^2))
-        //  3 -linear_ubound, linear_ubound         : x*0.5
-        //  4 linear_ubound : saturation_lbound     : x*0.5*(1 + x*Polynomial(x^2))
-        //  5 saturation_lbound: +inf               : x
-        constexpr int neg_saturation_lbound = 0xc0a00000;
-        constexpr int linear_ubound = 0x33800000;
-        constexpr int saturation_lbound = 0x40a00000;
-
-        auto mask_x_not_zone1 = _mm512_cmpnlt_ps_mask(x, _mm512_castsi512_ps(_mm512_set1_epi32(neg_saturation_lbound)));
-        x = _mm512_maskz_mov_ps(mask_x_not_zone1, x);
-
-        auto mask_x_in_zone5 = _mm512_cmpnle_ps_mask(x_positive, _mm512_castsi512_ps(_mm512_set1_epi32(saturation_lbound)));
-        poly = _mm512_mask_mov_ps(poly, mask_x_in_zone5, x);
-
-        auto mask_x_in_zone3 = _mm512_cmple_ps_mask(x_positive, _mm512_castsi512_ps(_mm512_set1_epi32(linear_ubound)));
-        poly = _mm512_mask_mov_ps(poly, mask_x_in_zone3, x_half);
-        return poly;
-    }
-
     inline void kpack_tile_B0B1(void * _dst0, void * _dst1, const int8_t * _src, int stride, int src_rows) {
         #define FROM_B(i) ((1<<4)|(i))
         static const uint32_t idx[16] = { 0,4,FROM_B(0),FROM_B(4),
@@ -1279,23 +1232,7 @@ namespace PP {
     template<>
     struct is_f32i32<int32_t> : std::true_type {};
 
-    enum Steps {
-        NONE = 0,
-        DEQUANT = 1<<0,
-        BIAS = 1<<1,
-        GELU = 1<<2,
-        QUANT = 1<<3,
-
-        BIAS_GELU = BIAS | GELU,
-        DEQUANT_BIAS_GELU = DEQUANT | BIAS_GELU,
-        DEQUANT_BIAS_GELU_QUANT = DEQUANT_BIAS_GELU | QUANT,
-        DEQUANT_BIAS_QUANT = DEQUANT | BIAS | QUANT,
-        DEQUANT_GELU_QUANT = DEQUANT | GELU | QUANT,
-        DEQUANT_QUANT = DEQUANT | QUANT,
-        
-        DEQUANT_GELU = DEQUANT | GELU,
-        DEQUANT_BIAS = DEQUANT | BIAS
-    };
+    using Steps = postops_types;
 
     template<typename D, Steps steps>
     struct BiasGeluStore {
@@ -1403,8 +1340,12 @@ namespace PP {
                     r1 = _mm512_add_ps(r1, bias1);
                 }
                 if (steps & GELU) {
-                    r0 = functional::gelu_erf_minmax_approx(r0);
-                    r1 = functional::gelu_erf_minmax_approx(r1);
+                    r0 = gelu_erf_minmax_approx_avx512(r0);
+                    r1 = gelu_erf_minmax_approx_avx512(r1);
+                }
+                if (steps & GELU_TANH) {
+                    r0 = gelu_tanh_avx512(r0);
+                    r1 = gelu_tanh_avx512(r1);
                 }
 
                 // quantize & store
@@ -1945,7 +1886,7 @@ struct Matmul {
                 m = M - 16;
             }
             _tile_zero(0);
-            if (tmmN  == 1) {
+            if (tmmN == 1) {
                 _tile_loadd(1, pA0, strideA); TILE_DP(0, 1, 2);
             }
             if (tmmN == 2) {
@@ -2453,18 +2394,3 @@ struct GemAvB {
 };
 
 } // namespace amx
-
-inline std::ostream & operator<<(std::ostream & os, const amx_kernel::PP::Steps & steps) {
-    os << "amx_kernel::PP::Steps::";
-    if (steps == amx_kernel::PP::Steps::NONE)
-        os << "NONE";
-    if (steps & amx_kernel::PP::Steps::DEQUANT)
-        os << "_DEQUANT";
-    if (steps & amx_kernel::PP::Steps::BIAS)
-        os << "_BIAS";
-    if (steps & amx_kernel::PP::Steps::GELU)
-        os << "_GELU";
-    if (steps & amx_kernel::PP::Steps::QUANT)
-        os << "_QUANT";
-    return os;
-}
