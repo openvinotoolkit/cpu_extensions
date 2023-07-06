@@ -51,3 +51,15 @@ add_subdirectory(src)
 if (CPU_EXTENSIONS_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# Get the latest commit hash
+execute_process(
+  COMMAND git rev-parse HEAD
+  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+  OUTPUT_VARIABLE GIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+file(WRITE ${CMAKE_BINARY_DIR}/git-state.txt ${GIT_HASH})
+install(FILES
+        ${CMAKE_BINARY_DIR}/git-state.txt
+        DESTINATION ${CMAKE_INSTALL_PREFIX})

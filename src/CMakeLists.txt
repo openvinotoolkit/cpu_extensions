@@ -14,7 +14,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                            PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
                                                   $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_INCLUDEDIR}>)
 
-set(CMAKE_DST ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
+set(CMAKE_DST lib/cmake/${PROJECT_NAME})
 # header files
 include(GNUInstallDirs)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/

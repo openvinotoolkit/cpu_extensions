@@ -46,7 +46,6 @@ public:
         result << "A_" << dtype_to_str(dt_a) << "_B_" << dtype_to_str(dt_b)
                << "_C_" << dtype_to_str(dt_c) << (is_transpose ? "_transpose" : "")
                << "_postops_" << postops_type << "_M_" << M << "_N_" << N << "_K_" << K;
-        printf("%s\n", result.str().c_str());
         return result.str();
     }
 
