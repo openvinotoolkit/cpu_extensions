@@ -50,6 +50,7 @@ public:
         // supported (qkv, dst): (bf16, bf16), (s8, s8)
         data_type_t qkv_precision;
         data_type_t dst_precision;
+        bool is_bloom;                  // for bloom mha
     };
     struct exec_param {
         size_t batch;
@@ -66,6 +67,7 @@ public:
                                             //      [batch, 1, query_seq_len, key_seq_len], when is_causal_in_attention is true
         uint8_t* attn_output;               // output, compact, shape: [batch, query_seq_len, num_heads * head_size]
         size_t head_stride_in_kv;           // kv stride for next head; kv may be preallocated a big buffer
+        float* alibi;                       // only is_bloom is true will use
         // expected quant schema:
         //   q,k,v use per tensor quant, attn_output may use per tensor/channel quant
         float q_dequant;

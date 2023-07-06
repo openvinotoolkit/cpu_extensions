@@ -21,8 +21,9 @@ void regclass_mha_gpt(pybind11::module m) {
         const float normal_factor,
         const std::string qkv_precision_name,
         const std::string dst_precision_name,
-        const size_t max_seq_len) {
-            llmdnn::mha_gpt::create_param param;
+        const size_t max_seq_len,
+        bool is_bloom) {
+            llmdnn::mha_gpt::create_param param = {0};
             param.num_heads = num_heads;
             param.head_size = head_size;
             param.head_size_aligned = head_size_aligned;
@@ -30,6 +31,7 @@ void regclass_mha_gpt(pybind11::module m) {
             param.qkv_precision = llmdnn::get_dt_from_str(qkv_precision_name);
             param.dst_precision = llmdnn::get_dt_from_str(dst_precision_name);
             param.max_seq_len = max_seq_len;
+            param.is_bloom = is_bloom;
             if (param.qkv_precision == llmdnn::dnnl_data_type_undef)
                 throw pybind11::type_error("Incorrect qkv type " + qkv_precision_name);
             if (param.dst_precision == llmdnn::dnnl_data_type_undef)
@@ -44,15 +46,16 @@ void regclass_mha_gpt(pybind11::module m) {
         py::arg("qkv_precision_name"),
         py::arg("dst_precision_name"),
         py::arg("max_seq_len"),
+        py::arg("is_bloom") = false,
         R"(
             Create mha
 
             :param num_heads: heads number.
             :type num_heads: int
         )");
-    cls.def("exec", [] (llmdnn::mha_gpt& self, const torch::Tensor& q, const torch::Tensor& k, const torch::Tensor& v, const torch::Tensor& attn_mask, int64_t head_size, int64_t key_seq_len) {
+    cls.def("exec", [] (llmdnn::mha_gpt& self, const torch::Tensor& q, const torch::Tensor& k, const torch::Tensor& v, const torch::Tensor& alibi, const torch::Tensor& attn_mask, int64_t head_size, int64_t key_seq_len) {
             // q: [batch, num_heads, query_seq_len, head_size_aligned]
-            // k: [batch, num_heads, max_seq_len, head_size_aligned] valid in max_seq_len: key_seq_len
+            // k: [batch, num_heads, head_size_aligned, max_seq_len] valid in max_seq_len: key_seq_len
             // v: [batch, num_heads, max_seq_len, head_size_aligned] valid in max_seq_len: key_seq_len
             // attn_mask: [batch, 1, 1/query_seq_len, key_seq_len]
             // out: [batch, query_seq_len, num_heads * head_size]
@@ -61,14 +64,14 @@ void regclass_mha_gpt(pybind11::module m) {
             auto num_heads = q.size(1);
             auto query_seq_len = q.size(2);
             auto head_size_aligned = q.size(3);
-            auto max_seq_len = k.size(2);
+            auto max_seq_len = v.size(2);
             auto attn_len = attn_mask.size(3);
             AT_ASSERT(max_seq_len == v.size(2) &&
                     batch == k.size(0) && batch == v.size(0) && batch == attn_mask.size(0) &&
                     num_heads == k.size(1) && num_heads == v.size(1) &&
-                    head_size_aligned == k.size(3) && head_size_aligned == v.size(3));
+                    head_size_aligned == v.size(3));
 
-            llmdnn::mha_gpt::exec_param param;
+            llmdnn::mha_gpt::exec_param param = {0};
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.key_seq_len = key_seq_len == 0 ? max_seq_len : key_seq_len;
@@ -86,6 +89,7 @@ void regclass_mha_gpt(pybind11::module m) {
                 param.k[i] = reinterpret_cast<uint8_t*>(k[i].data_ptr());
                 param.v[i] = reinterpret_cast<uint8_t*>(v[i].data_ptr());
             }
+            param.alibi = alibi.data_ptr<float>();
 
             self.exec(param);
             return out;
@@ -93,6 +97,7 @@ void regclass_mha_gpt(pybind11::module m) {
         py::arg("q"),
         py::arg("k"),
         py::arg("v"),
+        py::arg("alibi"),
         py::arg("attn_mask"),
         py::arg("head_size") = 0,
         py::arg("key_seq_len") = 0,
@@ -121,7 +126,7 @@ void regclass_mha_gpt(pybind11::module m) {
                     num_heads == k.size(1) && num_heads == v.size(1) &&
                     head_size_aligned == k.size(3) && head_size_aligned == v.size(3));
 
-            llmdnn::mha_gpt::exec_param param;
+            llmdnn::mha_gpt::exec_param param = {0};
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.key_seq_len = key_seq_len == 0 ? max_seq_len : key_seq_len;

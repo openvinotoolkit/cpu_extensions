@@ -64,7 +64,7 @@ bool mha_gpt_impl_amx::create(const mha_gpt::create_param& param) {
     if (_create_param.qkv_precision == dnnl_s8) {
         qKtrGemm_i8xi8.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            qKtrGemm_i8xi8[i] = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(false, true);
+            qKtrGemm_i8xi8[i] = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(false, !param.is_bloom);
         }
         qKVGemm_u8xi8.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
@@ -85,7 +85,7 @@ bool mha_gpt_impl_amx::create(const mha_gpt::create_param& param) {
         }
         qKtrGemm_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            qKtrGemm_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(false, true);
+            qKtrGemm_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(false, !param.is_bloom);
         }
         qKVGemm_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
@@ -109,16 +109,17 @@ bool mha_gpt_impl_amx::create(const mha_gpt::create_param& param) {
 
 void mha_gpt_impl_amx::mha_bf16(const mha_gpt::exec_param &param) {
     uint8_t* pQIn0 = param.q;
-    auto& pKIn0 = param.k;
-    auto& attn_masks = param.attention_mask;
-    auto& pVIn0 = param.v;
+    auto pKIn0 = param.k;
+    auto attn_masks = param.attention_mask;
+    auto pVIn0 = param.v;
     uint8_t* pout = param.attn_output;
+    auto alibi = param.alibi;
 
     auto outPrcSize = get_precision_size(_create_param.qkv_precision);
     auto& gemAvB_ops = gemAvB_BF16xBF16;
     auto& qKtrGemm_ops = qKtrGemm_BF16xBF16;
     auto& qKVGemm_ops = qKVGemm_BF16xBF16;
-    bool is_vector = param.query_seq_len == 1 && _create_param.head_size >= 32 && _create_param.head_size <= 32 * 6;
+    bool is_vector = param.query_seq_len == 1 && _create_param.head_size >= 32 && _create_param.head_size <= 32 * 6 && !_create_param.is_bloom;
     size_t head_stride_in_q = _create_param.head_size_aligned * param.query_seq_len;
     size_t batch_stride_in_q = head_stride_in_q * _create_param.num_heads;
     size_t head_stride_in_attn = _create_param.head_size;
@@ -185,10 +186,15 @@ void mha_gpt_impl_amx::mha_bf16(const mha_gpt::exec_param &param) {
                 auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
                 
                 tensor2D<ov::bfloat16> matQ(seq_cout, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
-                tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
                 tensor2D<float> matQK(seq_cout, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rndup(param.key_seq_len * sizeof(float), 64));
                 amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
-                (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.key_seq_len, pp, pKIn0_aux == prev_k);
+                if (!_create_param.is_bloom) {
+                    tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
+                    (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.key_seq_len, pp, pKIn0_aux == prev_k);
+                } else {
+                    tensor2D<ov::bfloat16> matK(_create_param.head_size, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), param.key_seq_len * sizeof(ov::bfloat16));
+                    (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.key_seq_len, pp, pKIn0_aux == prev_k);
+                }
                 prev_k = pKIn0_aux;
 
                 auto pMatMul0Out = bufferMatMul0Out_local;
@@ -198,7 +204,14 @@ void mha_gpt_impl_amx::mha_bf16(const mha_gpt::exec_param &param) {
                     for (int m = 0; m < seq_cout; m++) {
                         float* src = reinterpret_cast<float*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(float), 64));
                         ov::bfloat16* dst = reinterpret_cast<ov::bfloat16*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(ov::bfloat16), 64));
-                        mul_add_f32_avx512(src, src, _create_param.normal_factor, pAddIn1_aux + (m + seq_start) * param.key_seq_len, param.key_seq_len);
+                        if (!_create_param.is_bloom)
+                            mul_add_f32_avx512(src, src, _create_param.normal_factor, pAddIn1_aux + (m + seq_start) * param.key_seq_len, param.key_seq_len);
+                        else
+                            // alibi shape: [batch, head_num, 1, key_seq_len]
+                            mul_add2_f32_avx512(src, src, _create_param.normal_factor,
+                                alibi + i0 * _create_param.num_heads * param.key_seq_len + i1 * param.key_seq_len,
+                                pAddIn1_aux + (m + seq_start) * param.key_seq_len,
+                                param.key_seq_len);
                         softmax_avx512<ov::bfloat16>(dst, src, param.key_seq_len, nullptr);
                     }
                 } else {
@@ -208,7 +221,13 @@ void mha_gpt_impl_amx::mha_bf16(const mha_gpt::exec_param &param) {
                     for (int m = 0; m < seq_cout; m++) {
                         float* src = reinterpret_cast<float*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(float), 64));
                         ov::bfloat16* dst = reinterpret_cast<ov::bfloat16*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(ov::bfloat16), 64));
-                        mul_add_f32_avx512(src, src, _create_param.normal_factor, pAddIn1_aux, valid_softmax_items);
+                        if (!_create_param.is_bloom)
+                            mul_add_f32_avx512(src, src, _create_param.normal_factor, pAddIn1_aux, valid_softmax_items);
+                        else
+                            mul_add2_f32_avx512(src, src, _create_param.normal_factor, 
+                                alibi + i0 * _create_param.num_heads * param.key_seq_len + i1 * param.key_seq_len,
+                                pAddIn1_aux,
+                                valid_softmax_items);
                         softmax_avx512<ov::bfloat16>(dst, src, valid_softmax_items, nullptr);
                         // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
                         if (param.key_seq_len > valid_softmax_items) {
@@ -237,16 +256,17 @@ void mha_gpt_impl_amx::mha_bf16(const mha_gpt::exec_param &param) {
 
 void mha_gpt_impl_amx::mha_i8(const mha_gpt::exec_param &param) {
     uint8_t* pQIn0 = param.q;
-    auto& pKIn0 = param.k;
-    auto& attn_masks = param.attention_mask;
-    auto& pVIn0 = param.v;
+    auto pKIn0 = param.k;
+    auto attn_masks = param.attention_mask;
+    auto pVIn0 = param.v;
     uint8_t* pout = param.attn_output;
+    auto alibi = param.alibi;
 
     auto outPrcSize = get_precision_size(_create_param.dst_precision);
     auto& gemAvB_ops = gemAvB_i8xi8;
     auto& qKtrGemm_ops = qKtrGemm_i8xi8;
     auto& qKVGemm_ops = qKVGemm_u8xi8;
-    bool is_vector = param.query_seq_len == 1 && _create_param.head_size >= 64 && _create_param.head_size <= 64 * 6;
+    bool is_vector = param.query_seq_len == 1 && _create_param.head_size >= 64 && _create_param.head_size <= 64 * 6 && !_create_param.is_bloom;
     // dequant param
     auto mul_scales = _create_param.normal_factor * param.q_dequant * param.k_dequant;
     // prepare for per channel
@@ -324,10 +344,15 @@ void mha_gpt_impl_amx::mha_i8(const mha_gpt::exec_param &param) {
                 auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
                 
                 tensor2D<int8_t> matQ(seq_cout, _create_param.head_size, reinterpret_cast<int8_t*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
-                tensor2D<int8_t> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
                 tensor2D<float> matQK(seq_cout, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rndup(param.key_seq_len * sizeof(float), 64));
                 amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
-                (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.key_seq_len, pp, prev_k == pKIn0_aux);
+                if (!_create_param.is_bloom) {
+                    tensor2D<int8_t> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
+                    (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.key_seq_len, pp, prev_k == pKIn0_aux);
+                } else {
+                    tensor2D<int8_t> matK(_create_param.head_size, param.key_seq_len, reinterpret_cast<int8_t*>(pKIn0_aux), param.key_seq_len * sizeof(int8_t));
+                    (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.key_seq_len, pp, prev_k == pKIn0_aux);
+                }
                 prev_k = pKIn0_aux;
 
                 auto pMatMul0Out = bufferMatMul0Out_local;
@@ -338,6 +363,14 @@ void mha_gpt_impl_amx::mha_i8(const mha_gpt::exec_param &param) {
                         float* src = reinterpret_cast<float*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(float), 64));
                         uint8_t* dst = reinterpret_cast<uint8_t*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(uint8_t), 64));
                         mul_add_f32_avx512(src, src, mul_scales, pAddIn1_aux + (m + seq_start) * param.key_seq_len, param.key_seq_len);
+                        if (!_create_param.is_bloom)
+                            mul_add_f32_avx512(src, src, mul_scales, pAddIn1_aux + (m + seq_start) * param.key_seq_len, param.key_seq_len);
+                        else
+                            // alibi shape: [batch, head_num, 1, key_seq_len]
+                            mul_add2_f32_avx512(src, src, mul_scales,
+                                alibi + i0 * _create_param.num_heads * param.key_seq_len + i1 * param.key_seq_len,
+                                pAddIn1_aux + (m + seq_start) * param.key_seq_len,
+                                param.key_seq_len);
                         softmax_avx512<uint8_t>(dst, src, param.key_seq_len, param.qk_quant);
                     }
                 } else {
@@ -347,7 +380,13 @@ void mha_gpt_impl_amx::mha_i8(const mha_gpt::exec_param &param) {
                     for (int m = 0; m < seq_cout; m++) {
                         float* src = reinterpret_cast<float*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(float), 64));
                         uint8_t* dst = reinterpret_cast<uint8_t*>(pMatMul0Out + m * rndup(param.key_seq_len * sizeof(uint8_t), 64));
-                        mul_add_f32_avx512(src, src, mul_scales, pAddIn1_aux, valid_softmax_items);
+                        if (!_create_param.is_bloom)
+                            mul_add_f32_avx512(src, src, mul_scales, pAddIn1_aux, valid_softmax_items);
+                        else
+                            mul_add2_f32_avx512(src, src, mul_scales, 
+                                alibi + i0 * _create_param.num_heads * param.key_seq_len + i1 * param.key_seq_len,
+                                pAddIn1_aux,
+                                valid_softmax_items);
                         softmax_avx512<uint8_t>(dst, src, valid_softmax_items, param.qk_quant);
                         // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
                         if (param.key_seq_len > valid_softmax_items) {

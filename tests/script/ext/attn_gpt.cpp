@@ -70,7 +70,7 @@ attn_gpt::attn_gpt(): _emb_gpt(std::make_shared<llmdnn::emb_gpt>()),
 
 bool attn_gpt::create(const attn_gpt::create_param& param) {
     _create_param = param;
-    llmdnn::emb_gpt::create_param emb_param;
+    llmdnn::emb_gpt::create_param emb_param = {0};
     emb_param.num_heads = param.num_heads;
     emb_param.head_size = param.head_size;
     emb_param.head_size_aligned = param.head_size_aligned;
@@ -82,7 +82,7 @@ bool attn_gpt::create(const attn_gpt::create_param& param) {
     if (!_emb_gpt->create(emb_param))
         return false;
 
-    llmdnn::mha_gpt::create_param mha_param;
+    llmdnn::mha_gpt::create_param mha_param = {0};
     mha_param.num_heads = param.num_heads;
     mha_param.head_size = param.head_size;
     mha_param.head_size_aligned = param.head_size_aligned;
@@ -104,7 +104,7 @@ void attn_gpt::exec(const attn_gpt::exec_param& param) {
         _query_cached_batch = param.batch;
     }
 
-    llmdnn::emb_gpt::exec_param emb_param;
+    llmdnn::emb_gpt::exec_param emb_param = {0};
     emb_param.batch = param.batch;
     emb_param.query_seq_len = param.query_seq_len;
     emb_param.past_seq_len = param.past_seq_len;
@@ -125,7 +125,7 @@ void attn_gpt::exec(const attn_gpt::exec_param& param) {
     emb_param.sin = param.sin;
     _emb_gpt->exec(emb_param);
 
-    llmdnn::mha_gpt::exec_param mha_param;
+    llmdnn::mha_gpt::exec_param mha_param = {0};
     mha_param.batch = param.batch;
     mha_param.query_seq_len = param.query_seq_len;
     mha_param.key_seq_len = param.query_seq_len + param.past_seq_len;
@@ -152,7 +152,7 @@ void regclass_attn_gpt(pybind11::module m) {
         const size_t max_seq_len,
         const size_t rotary_dims,
         bool use_position2d) {
-            attn_gpt::create_param param;
+            attn_gpt::create_param param = {0};
             param.num_heads = num_heads;
             param.head_size = head_size;
             param.head_size_aligned = head_size_aligned;
@@ -204,7 +204,7 @@ void regclass_attn_gpt(pybind11::module m) {
             AT_ASSERT(past_seq_len <= layer_past_key_dst.size(2) && head_size <= layer_past_key_dst.size(3) &&
                       query_seq_len <= layer_past_key_dst.size(2));
 
-            attn_gpt::exec_param param;
+            attn_gpt::exec_param param = {0};
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.past_seq_len = past_seq_len;

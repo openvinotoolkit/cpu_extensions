@@ -111,4 +111,26 @@ inline void mul_add_f32_avx512(float* dst, float* src, float mul, float* add, in
     }
 }
 
+inline void mul_add2_f32_avx512(float* dst, float* src, float mul, float* add1, float* add2, int ele_num) {
+    auto mul_f = _mm512_set1_ps(mul);
+    int i;
+    auto tail = ele_num % 16;
+    __mmask16 msk = _cvtu32_mask16(0xFFFFu >> (16 - tail));
+    for (i = 0; i < ele_num - tail; i += 16) {
+        auto a_f = _mm512_loadu_ps(src);
+        auto add1_f = _mm512_loadu_ps(add1);
+        auto add2_f = _mm512_loadu_ps(add2);
+        _mm512_storeu_ps(dst, _mm512_add_ps(_mm512_fmadd_ps(a_f, mul_f, add1_f), add2_f));
+        src += 16;
+        dst += 16;
+        add1 += 16;
+        add2 += 16;
+    }
+    if (tail) {
+        auto a_f = _mm512_maskz_loadu_ps(msk, src);
+        auto add1_f = _mm512_maskz_loadu_ps(msk, add1);
+        auto add2_f = _mm512_maskz_loadu_ps(msk, add2);
+        _mm512_mask_storeu_ps(dst, msk, _mm512_add_ps(_mm512_fmadd_ps(a_f, mul_f, add1_f), add2_f));
+    }
+}
 }

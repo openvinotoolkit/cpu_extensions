@@ -24,7 +24,7 @@ void regclass_emb_gpt(pybind11::module m) {
         const std::string dst_precision_name,
         const size_t rotary_dims,
         bool use_position2d) {
-            llmdnn::emb_gpt::create_param param;
+            llmdnn::emb_gpt::create_param param = {0};
             param.num_heads = num_heads;
             param.head_size = head_size;
             param.head_size_aligned = head_size_aligned;
@@ -75,7 +75,7 @@ void regclass_emb_gpt(pybind11::module m) {
             AT_ASSERT(past_seq_len <= layer_past_key_dst.size(2) && head_size <= layer_past_key_dst.size(3) &&
                       query_seq_len <= layer_past_key_dst.size(2));
 
-            llmdnn::emb_gpt::exec_param param;
+            llmdnn::emb_gpt::exec_param param = {0};
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.past_seq_len = past_seq_len;
@@ -136,7 +136,7 @@ void regclass_emb_gpt(pybind11::module m) {
             AT_ASSERT(past_seq_len <= layer_past_key_dst.size(2) && head_size <= layer_past_key_dst.size(3) &&
                       query_seq_len <= layer_past_key_dst.size(2));
 
-            llmdnn::emb_gpt::exec_param param;
+            llmdnn::emb_gpt::exec_param param = {0};
             param.batch = batch;
             param.query_seq_len = query_seq_len;
             param.past_seq_len = past_seq_len;
