@@ -13,6 +13,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                            PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
                                                   $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_INCLUDEDIR}>)
+target_compile_options(${PROJECT_NAME} PRIVATE ${EXTRA_CXX_FLAGS})
 
 set(CMAKE_DST lib/cmake/${PROJECT_NAME})
 # header files
