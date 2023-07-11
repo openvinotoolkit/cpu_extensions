@@ -173,7 +173,7 @@ class BloomAttentionExt:
         normal_factor = 1.0 / math.sqrt(head_size)
         qkv_precision_name = 's8' if is_int8 else 'bf16'
         dst_precision_name = 's8' if is_int8 else 'bf16'
-        self.mha.create(num_heads, head_size, head_size_aligned, normal_factor, qkv_precision_name,
+        self.mha.create(num_heads, head_size, normal_factor, qkv_precision_name,
                 dst_precision_name, max_seq_len, True)
 
     def forward(self, query, key, value, alibi, attention_mask):

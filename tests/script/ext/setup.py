@@ -16,7 +16,7 @@ export CC=icx
 debug = False
 if 'DEBUG_EXT' in os.environ:
   debug = True if os.environ['DEBUG_EXT'] == '1' else False
-extra_args = ['-fopenmp',
+extra_args = ['-fopenmp', '-Wno-narrowing', '-Wno-attributes',
               '-march=native']
 cpu_extensions_lib_dir = f'{os.getcwd()}/../../../build/lib'
 if debug:

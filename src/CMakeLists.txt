@@ -32,7 +32,6 @@ install(TARGETS ${PROJECT_NAME}
 # config file
 install(EXPORT ${PROJECT_NAME}Targets
         FILE ${PROJECT_NAME}Config.cmake
-        NAMESPACE ${PROJECT_NAME}::
         DESTINATION ${CMAKE_DST})
 
 # version file

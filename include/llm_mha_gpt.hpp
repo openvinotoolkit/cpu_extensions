@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include "llm_types.hpp"
+#include "llm_plain_tensor.hpp"
 
 namespace llmdnn {
 
@@ -44,7 +45,6 @@ public:
     struct create_param {
         size_t num_heads;
         size_t head_size;
-        size_t head_size_aligned;       // better to aligned to 64 bytes for best performance, apply for qkv
         size_t max_seq_len;             // max seq length for computing the size of matmul tmp result
         float normal_factor;
         // supported (qkv, dst): (bf16, bf16), (s8, s8)
@@ -57,17 +57,14 @@ public:
         size_t query_seq_len;
         size_t key_seq_len;
         bool is_causal_in_attention;        // causal mask is fused in attention mask: chatglm uses it.
-        uint8_t* q;                         // q buffer, compact, shape: [batch, num_heads, query_seq_len, head_size]
-        uint8_t** k;                        // k buffer, k[N] stands different batch which may be discreted
-                                            //      k[0] shape: [batch, num_heads, key_seq_len, head_size]
-        uint8_t** v;                        // v buffer, v[N] stands different batch which may be discreted
-                                            //      v[0] shape: [batch, num_heads, value_seq_len, head_size]
-        float* attention_mask;              // attention mask, attention_mask[0] shape:
+        plain_tensor q;                     // q buffer, shape: [batch, num_heads, query_seq_len, head_size]
+        plain_tensor k;                     // k buffer, shape: [batch, num_heads, key_seq_len, head_size]
+        plain_tensor v;                     // v buffer, shape: [batch, num_heads, value_seq_len, head_size]
+        plain_tensor attention_mask;        // attention mask, shape:
                                             //      [batch, 1, 1, key_seq_len], when is_causal_in_attention is false
                                             //      [batch, 1, query_seq_len, key_seq_len], when is_causal_in_attention is true
-        uint8_t* attn_output;               // output, compact, shape: [batch, query_seq_len, num_heads * head_size]
-        size_t head_stride_in_kv;           // kv stride for next head; kv may be preallocated a big buffer
-        float* alibi;                       // only is_bloom is true will use
+        plain_tensor attn_output;           // output, compact, shape: [batch, query_seq_len, num_heads * head_size]
+        plain_tensor alibi;                 // only is_bloom is true will use, shape: [batch, num_heads, 1, key_seq_len]
         // expected quant schema:
         //   q,k,v use per tensor quant, attn_output may use per tensor/channel quant
         float q_dequant;

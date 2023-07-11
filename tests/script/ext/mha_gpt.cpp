@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <optional>
 #include <torch/extension.h>
 #include <memory>
 #include "alloca.h"
+#include "common/bf16.hpp"
 #include "module.hpp"
 #include "common/utility.hpp"
 #include "utility_kernel_amx.hpp"
@@ -17,7 +19,6 @@ void regclass_mha_gpt(pybind11::module m) {
     cls.def("create", [] (llmdnn::mha_gpt& self,
         const size_t num_heads,
         const size_t head_size,
-        const size_t head_size_aligned,
         const float normal_factor,
         const std::string qkv_precision_name,
         const std::string dst_precision_name,
@@ -26,7 +27,6 @@ void regclass_mha_gpt(pybind11::module m) {
             llmdnn::mha_gpt::create_param param = {0};
             param.num_heads = num_heads;
             param.head_size = head_size;
-            param.head_size_aligned = head_size_aligned;
             param.normal_factor = normal_factor;
             param.qkv_precision = llmdnn::get_dt_from_str(qkv_precision_name);
             param.dst_precision = llmdnn::get_dt_from_str(dst_precision_name);
@@ -41,7 +41,6 @@ void regclass_mha_gpt(pybind11::module m) {
         },
         py::arg("num_heads"),
         py::arg("head_size"),
-        py::arg("head_size_aligned"),
         py::arg("normal_factor"),
         py::arg("qkv_precision_name"),
         py::arg("dst_precision_name"),
@@ -78,18 +77,17 @@ void regclass_mha_gpt(pybind11::module m) {
             head_size = head_size == 0 ? head_size_aligned : head_size;
             auto out = q.new_empty({batch, query_seq_len, num_heads * head_size});
             AT_ASSERT((int64_t)param.key_seq_len == attn_len);
-            param.q = reinterpret_cast<uint8_t*>(q.data_ptr());
-            param.attn_output = reinterpret_cast<uint8_t*>(out.data_ptr());
-            param.head_stride_in_kv = max_seq_len * head_size_aligned;
+            param.q.resize({q.size(0), q.size(1), q.size(2), q.size(3)}, reinterpret_cast<ov::bfloat16*>(q.data_ptr()));
+            param.attn_output.resize({batch, query_seq_len, num_heads * head_size}, reinterpret_cast<ov::bfloat16*>(out.data_ptr()));
             param.is_causal_in_attention = attn_mask.size(2) != 1;
-            param.attention_mask = attn_mask.data_ptr<float>();
-            param.k = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
-            param.v = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
-            for (int i = 0; i < batch; i++) {
-                param.k[i] = reinterpret_cast<uint8_t*>(k[i].data_ptr());
-                param.v[i] = reinterpret_cast<uint8_t*>(v[i].data_ptr());
+            param.attention_mask.resize({attn_mask.size(0), attn_mask.size(1), attn_mask.size(2), attn_mask.size(3)}, attn_mask.data_ptr<float>());
+            param.k.resize({k.size(0), k.size(1), k.size(2), k.size(3)}, reinterpret_cast<ov::bfloat16*>(k.data_ptr()));
+            if (alibi.dim() == 3) {
+                std::swap(param.k.m_dims[2], param.k.m_dims[3]);
+                std::swap(param.k.m_strides[2], param.k.m_strides[3]);
+                param.alibi.resize({alibi.size(0), alibi.size(1), alibi.size(2)}, alibi.data_ptr<float>());
             }
-            param.alibi = alibi.data_ptr<float>();
+            param.v.resize({v.size(0), v.size(1), v.size(2), v.size(3)}, reinterpret_cast<ov::bfloat16*>(v.data_ptr()));
 
             self.exec(param);
             return out;
@@ -133,22 +131,19 @@ void regclass_mha_gpt(pybind11::module m) {
             head_size = head_size == 0 ? head_size_aligned : head_size;
             auto out = q.new_empty({batch, query_seq_len, num_heads * head_size}, torch::TensorOptions(torch::kInt8));
             AT_ASSERT((int64_t)param.key_seq_len == attn_len);
-            param.q = reinterpret_cast<uint8_t*>(q.data_ptr());
-            param.attn_output = reinterpret_cast<uint8_t*>(out.data_ptr());
-            param.head_stride_in_kv = max_seq_len * head_size_aligned;
-            param.k = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
-            param.v = reinterpret_cast<uint8_t**>(alloca(batch * sizeof(uint8_t*)));
+
+            param.q.resize({q.size(0), q.size(1), q.size(2), q.size(3)}, reinterpret_cast<uint8_t*>(q.data_ptr()));
+            param.attn_output.resize({batch, query_seq_len, num_heads * head_size}, reinterpret_cast<uint8_t*>(out.data_ptr()));
             param.is_causal_in_attention = attn_mask.size(2) != 1;
-            param.attention_mask = attn_mask.data_ptr<float>();
+            param.attention_mask.resize({attn_mask.size(0), attn_mask.size(1), attn_mask.size(2), attn_mask.size(3)}, attn_mask.data_ptr<float>());
+            param.k.resize({k.size(0), k.size(1), k.size(2), k.size(3)}, reinterpret_cast<uint8_t*>(k.data_ptr()));
+            param.v.resize({v.size(0), v.size(1), v.size(2), v.size(3)}, reinterpret_cast<uint8_t*>(v.data_ptr()));
+
             param.q_dequant = q_dequant;
             param.k_dequant = k_dequant;
             param.v_dequant = v_dequant;
             param.qk_quant = qk_quant;
             param.qkv_quant = qkv_quant;
-            for (int i = 0; i < batch; i++) {
-                param.k[i] = reinterpret_cast<uint8_t*>(k[i].data_ptr());
-                param.v[i] = reinterpret_cast<uint8_t*>(v[i].data_ptr());
-            }
 
             self.exec(param);
             return out;

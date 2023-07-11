@@ -85,7 +85,6 @@ bool attn_gpt::create(const attn_gpt::create_param& param) {
     llmdnn::mha_gpt::create_param mha_param = {0};
     mha_param.num_heads = param.num_heads;
     mha_param.head_size = param.head_size;
-    mha_param.head_size_aligned = param.head_size_aligned;
     mha_param.normal_factor = param.normal_factor;
     mha_param.qkv_precision = param.qkv_precision;
     mha_param.dst_precision = param.dst_precision;
@@ -129,13 +128,12 @@ void attn_gpt::exec(const attn_gpt::exec_param& param) {
     mha_param.batch = param.batch;
     mha_param.query_seq_len = param.query_seq_len;
     mha_param.key_seq_len = param.query_seq_len + param.past_seq_len;
-    mha_param.q = emb_param.query_dst;
-    mha_param.attn_output = param.attn_output;
-    mha_param.head_stride_in_kv = param.head_stride_in_kv;
+    mha_param.q.resize({param.batch, _create_param.num_heads, param.query_seq_len, _create_param.head_size_aligned}, reinterpret_cast<ov::bfloat16*>(emb_param.query_dst));
+    mha_param.attn_output.resize({param.batch, param.query_seq_len, _create_param.num_heads * _create_param.head_size}, reinterpret_cast<ov::bfloat16*>(param.attn_output));
     mha_param.is_causal_in_attention = param.is_causal_in_attention;
-    mha_param.attention_mask = param.attention_mask;
-    mha_param.k = emb_param.layer_past_key_dst;
-    mha_param.v = emb_param.layer_past_value_dst;
+    mha_param.attention_mask.resize({param.batch, 1, param.query_seq_len, mha_param.key_seq_len}, static_cast<float*>(param.attention_mask));
+    mha_param.k.resize({param.batch, _create_param.num_heads, _create_param.max_seq_len, _create_param.head_size_aligned}, reinterpret_cast<ov::bfloat16*>(param.layer_past_key_dst[0]));
+    mha_param.v.resize({param.batch, _create_param.num_heads, _create_param.max_seq_len, _create_param.head_size_aligned}, reinterpret_cast<ov::bfloat16*>(param.layer_past_value_dst[0]));
     _mha_gpt->exec(mha_param);
 }
 
