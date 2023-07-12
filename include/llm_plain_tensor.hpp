@@ -32,11 +32,11 @@ struct plain_tensor_base {
     }
 
     size_t size(int i) {
-        assert(i < m_rank);
+        assert(static_cast<size_t>(i) < m_rank);
         return m_dims[i];
     }
     size_t stride(int i) {
-        assert(i < m_rank);
+        assert(static_cast<size_t>(i) < m_rank);
         return m_strides[i];
     }
 };
