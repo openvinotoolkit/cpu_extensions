@@ -445,8 +445,8 @@ void mha_gpt_impl_amx::exec(const mha_gpt::exec_param& param) {
     }
 }
 
-std::shared_ptr<mha_gpt::impl> new_impl_amx() {
-    return std::make_shared<mha_gpt_impl_amx>();
+mha_gpt::impl* new_impl_amx() {
+    return new mha_gpt_impl_amx();
 }
 
 }

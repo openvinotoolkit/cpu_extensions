@@ -12,34 +12,6 @@
 
 namespace llmdnn {
 
-// pattern is:
-// query:[batch, num_heads, query_seq_len, head_size]  key:[batch, num_heads, key_seq_len, head_size]
-//    \                                                 |
-//     \                                           Transpose0: [batch, num_heads, head_size, key_seq_len]
-//      \                                              /
-//       \                                            /
-//        \                                          /
-//        MatMul0: [batch, num_heads, query_seq_len, key_seq_len]
-//          |
-//          |   norm_factor(const): [1]
-//          |       /
-//       Multiply: [batch, num_heads, query_seq_len, key_seq_len]
-//          |
-//          |   causal_mask: [1, 1, query_seq_len, key_seq_len]
-//          |       /
-//       Select(only for 1x300): [batch, num_heads, query_seq_len, key_seq_len]
-//          |
-//          |   attention_mask:[batch, 1, 1, key_seq_len]
-//          |       /
-//       Add: [batch, num_heads, query_seq_len, key_seq_len]
-//          |
-//       SoftMax: [batch, num_heads, query_seq_len, key_seq_len]
-//          |
-//           \  value:[batch, num_heads, key_seq_len, head_size]
-//            \     /
-//             MatMul1: [batch, num_heads, query_seq_len, head_size]
-//               |
-//            Transpose1(only for 1x300): [batch, query_seq_len, num_heads * head_size]
 class mha_gpt {
 public:
     struct create_param {
@@ -75,15 +47,17 @@ public:
     };
 
     mha_gpt();
+    ~mha_gpt();
     bool create(const create_param& param);
     void exec(const exec_param& param);
 
     struct impl {
+        virtual ~impl() {}
         virtual bool create(const create_param& param) = 0;
         virtual void exec(const exec_param& param) = 0;
     };
 protected:
-    std::shared_ptr<impl> _impl;
+    impl* _impl;
 };
 
 }

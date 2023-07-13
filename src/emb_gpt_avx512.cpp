@@ -217,8 +217,8 @@ void emb_gpt_impl_avx512::exec(const emb_gpt::exec_param& param) {
     }
 }
 
-std::shared_ptr<emb_gpt::impl> new_impl_avx512() {
-    return std::make_shared<emb_gpt_impl_avx512>();
+emb_gpt::impl* new_impl_avx512() {
+    return new emb_gpt_impl_avx512();
 }
 
 }

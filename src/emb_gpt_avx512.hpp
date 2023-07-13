@@ -12,6 +12,6 @@
 
 namespace llmdnn {
 
-std::shared_ptr<emb_gpt::impl> new_impl_avx512();
+emb_gpt::impl* new_impl_avx512();
 
 }

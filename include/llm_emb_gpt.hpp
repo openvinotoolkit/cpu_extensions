@@ -45,15 +45,17 @@ public:
     };
 
     emb_gpt();
+    ~emb_gpt();
     bool create(const create_param& param);
     void exec(const exec_param& param);
 
     struct impl {
+        virtual ~impl() {}
         virtual bool create(const create_param& param) = 0;
         virtual void exec(const exec_param& param) = 0;
     };
 protected:
-    std::shared_ptr<impl> _impl;
+    impl* _impl;
 };
 
 }

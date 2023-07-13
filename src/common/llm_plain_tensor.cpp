@@ -18,6 +18,8 @@ plain_tensor::plain_tensor() {
 }
 
 plain_tensor::~plain_tensor() {
+    if (m_capacity && m_ptr)
+        free(m_ptr);
 }
 
 plain_tensor plain_tensor::index(const std::initializer_list<tensor_index>& indices) const {
@@ -43,7 +45,7 @@ plain_tensor plain_tensor::index(const std::initializer_list<tensor_index>& indi
         i_src++;
     }
     sub_tensor.m_rank = i_dst;  // index may imply squeeze
-    sub_tensor.m_ptr = std::shared_ptr<void>(reinterpret_cast<uint8_t*>(m_ptr.get()) + off, [](void*) {});
+    sub_tensor.m_ptr = reinterpret_cast<uint8_t*>(m_ptr) + off;
     return sub_tensor;
 }
 
@@ -61,8 +63,8 @@ plain_tensor plain_tensor::slice(int axis, int start, int end) const {
     sub_tensor.m_dims[axis] = end - start;
 
     auto off = start * m_strides[axis];
-    auto* data = reinterpret_cast<uint8_t*>(m_ptr.get()) + off;
-    sub_tensor.m_ptr = std::shared_ptr<void>(reinterpret_cast<void*>(data), [](void*) {});
+    auto* data = reinterpret_cast<uint8_t*>(m_ptr) + off;
+    sub_tensor.m_ptr = reinterpret_cast<void*>(data);
 
     return sub_tensor;
 }
@@ -99,7 +101,7 @@ plain_tensor plain_tensor::reshape(const std::initializer_list<size_t>& target_s
     plain_tensor new_tensor_view;
     assert(is_dense());
     //assert(shape_size(target_shape) == shape_size(m_dims));
-    new_tensor_view.resize(std::vector<size_t>(target_shape), m_ptr.get(), m_element_size);
+    new_tensor_view.resize(std::vector<size_t>(target_shape), m_ptr, m_element_size);
     return new_tensor_view;
 }
 
@@ -135,15 +137,13 @@ void plain_tensor::resize(const std::vector<size_t>& new_dims, void* data, size_
     if (!data) {
         auto capacity_new = m_strides[0] * m_dims[0];
         if (capacity_new > m_capacity) {
-            m_ptr = std::shared_ptr<void>(aligned_alloc(64, capacity_new), [](void* p) {
-                ::free(p);
-            });
+            m_ptr = aligned_alloc(64, capacity_new);
             m_capacity = capacity_new;
         }
     } else {
         // m_capacity is zero to indicate that we don't own the memory
         m_capacity = 0;
-        m_ptr = std::shared_ptr<void>(reinterpret_cast<void*>(data), [](void*) {});
+        m_ptr = reinterpret_cast<void*>(data);
     }
 }
 

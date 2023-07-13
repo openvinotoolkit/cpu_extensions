@@ -13,6 +13,10 @@ namespace llmdnn {
 emb_gpt::emb_gpt(): _impl(new_impl_avx512()) {
 }
 
+emb_gpt::~emb_gpt() {
+    delete _impl;
+}
+
 bool emb_gpt::create(const create_param& param) {
     return _impl->create(param);
 }

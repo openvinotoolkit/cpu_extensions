@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <memory.h>
 
 namespace llmdnn {
 
@@ -20,15 +21,12 @@ struct plain_tensor_base {
     size_t m_dims[PLAINTENSOR_RANK_MAX];
     size_t m_rank;
 
-    std::shared_ptr<void> m_ptr;
+    void* m_ptr = nullptr;
     size_t m_capacity = 0;
     size_t m_element_size = 1;
 
-    uint8_t* batched_ptr_buff[8];
-    std::vector<uint8_t*> batched_ptr_backup;
-
     operator bool() {
-        return static_cast<bool>(m_ptr);
+        return m_ptr != nullptr;
     }
 
     size_t size(int i) {
@@ -44,6 +42,21 @@ struct plain_tensor_base {
 struct plain_tensor : public plain_tensor_base {
     plain_tensor();
     ~plain_tensor();
+    plain_tensor(const plain_tensor&) = delete;
+    plain_tensor& operator = (const plain_tensor&) = delete;
+    plain_tensor(plain_tensor&& t) {
+        memcpy(reinterpret_cast<void*>(this), &t, sizeof(plain_tensor_base));
+        t.m_capacity = 0;
+        t.m_ptr = nullptr;
+    }
+    plain_tensor& operator == (plain_tensor&& t) {
+        if (m_capacity && m_ptr)
+            free(m_ptr);
+        memcpy(reinterpret_cast<void*>(this), &t, sizeof(plain_tensor_base));
+        t.m_capacity = 0;
+        t.m_ptr = nullptr;
+        return *this;
+    }
 
     struct tensor_index {
         int start;
@@ -116,7 +129,7 @@ struct plain_tensor : public plain_tensor_base {
 
     template<typename DT>
     DT* data() const {
-        return reinterpret_cast<DT*>(m_ptr.get());
+        return reinterpret_cast<DT*>(m_ptr);
     }
 
     template<typename DT>
@@ -127,7 +140,7 @@ struct plain_tensor : public plain_tensor_base {
             auto coordinate = (it != index.end()) ? (*it++) : 0;
             off += stride * coordinate;
         }
-        return *reinterpret_cast<DT*>(reinterpret_cast<uint8_t*>(m_ptr.get()) + off);
+        return *reinterpret_cast<DT*>(reinterpret_cast<uint8_t*>(m_ptr) + off);
     }
 
     template<typename DT>
@@ -136,18 +149,6 @@ struct plain_tensor : public plain_tensor_base {
     }
 
     void assert_dims(const std::initializer_list<size_t>& expect_dims) const;
-    uint8_t** get_batched_ptrs() {
-        uint8_t** ret_ptrs = batched_ptr_buff;
-        auto batch_size = m_dims[0];
-        if (batch_size > sizeof(batched_ptr_buff) / sizeof(batched_ptr_buff[0])) {
-            batched_ptr_backup.resize(batch_size);
-            ret_ptrs = &batched_ptr_backup[0];
-        }
-        for (size_t b = 0; b < batch_size; b++) {
-            ret_ptrs[b] = &at<uint8_t>({b});
-        }
-        return ret_ptrs;
-    }
 
     template<typename DT>
     std::string repr(int max_total_lines = 16, int lines_per_row = 1) const {
@@ -175,7 +176,7 @@ struct plain_tensor : public plain_tensor_base {
         int cur_line_elecnt = 0;
         int cur_row_elecnt = 0;
         size_t i;
-        auto* p = reinterpret_cast<DT*>(m_ptr.get());
+        auto* p = reinterpret_cast<DT*>(m_ptr);
         for (i = 0; i < sz && max_total_lines > 0; i++) {
             if ((i % last_dim_size) == 0) {
                 ss << row_id << ":\t\t";

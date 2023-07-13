@@ -12,6 +12,6 @@
 
 namespace llmdnn {
 
-std::shared_ptr<mha_gpt::impl> new_impl_amx();
+mha_gpt::impl* new_impl_amx();
 
 }
