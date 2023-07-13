@@ -163,21 +163,11 @@ class BloomAttention(nn.Module):
         return context_layer
 
 class BloomAttentionExt:
-    def __init__(self, num_attention_heads, hidden_size, max_position_embeddings, is_int8=False):
+    def __init__(self):
         self.mha = ld.mha_gpt()
-        num_heads = num_attention_heads
-        head_size = hidden_size // num_attention_heads
-        max_seq_len = max_position_embeddings
 
-        head_size_aligned = head_size
-        normal_factor = 1.0 / math.sqrt(head_size)
-        qkv_precision_name = 's8' if is_int8 else 'bf16'
-        dst_precision_name = 's8' if is_int8 else 'bf16'
-        self.mha.create(num_heads, head_size, normal_factor, qkv_precision_name,
-                dst_precision_name, max_seq_len, True)
-
-    def forward(self, query, key, value, alibi, attention_mask):
-        return self.mha.exec(query, key, value, alibi, attention_mask)
+    def forward(self, query, key, value, alibi, attention_mask, normal_factor):
+        return self.mha.exec(query, key, value, alibi, attention_mask, normal_factor, False)
 
 HEAD_NUM = 32
 SIZE_PER_HEAD = 80
@@ -195,7 +185,7 @@ def test_bloom():
         # k: [batch, num_heads, head_size, key_seq_len]
         # v: [batch, num_heads, value_seq_len, head_size]
         # alibi: [batch, num_heads, 1, key_seq_len]
-        # attn: [2, 1, 1, key_seq_len]
+        # attn: [2, 1, query_seq_len, key_seq_len]
         (np.random.random(size=[2, HEAD_NUM, 2, SIZE_PER_HEAD]).astype(np.float32),
          np.random.random(size=[2, HEAD_NUM, SIZE_PER_HEAD, 32]).astype(np.float32),
          np.random.random(size=[2, HEAD_NUM, 32, SIZE_PER_HEAD]).astype(np.float32),
@@ -213,7 +203,7 @@ def test_bloom():
          np.zeros([2, 1, 1, 200], dtype=np.float32)),
     ]
     ref_net = get_ref_model()
-    net = BloomAttentionExt(HEAD_NUM, HIDDEN_SIZE, MAX_POSITION_EMBEDDINGS)
+    net = BloomAttentionExt()
     with torch.cpu.amp.autocast():
         for (i, input) in enumerate(inputs):
             q, k, v, alibi, attn_mask = input
@@ -221,11 +211,11 @@ def test_bloom():
             k = torch.from_numpy(k).to(torch.bfloat16)
             v = torch.from_numpy(v).to(torch.bfloat16)
             alibi = torch.from_numpy(alibi) # to(torch.bfloat16)
-            alibi = alibi.view(-1, alibi.size(2), alibi.size(3))
             attn_mask = torch.from_numpy(attn_mask)
             attn_mask[:,:,:,-2:] = torch.finfo(torch.float32).min
+            output = net.forward(q, k, v, alibi, attn_mask, normal_factor = 1.0 / math.sqrt(SIZE_PER_HEAD))
+            alibi = alibi.view(-1, alibi.size(2), alibi.size(3))
             ref_output = ref_net.forward(q, k, v, alibi, attn_mask)
-            output = net.forward(q, k, v, alibi, attn_mask)
             if not torch.allclose(ref_output, output, rtol=0.001, atol=0.01):
                 print(f"error at index {i} ref:\n{ref_output} \ncur:\n {output} ")
                 assert(False)

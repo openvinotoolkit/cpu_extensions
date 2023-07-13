@@ -12,6 +12,15 @@
 
 namespace llmdnn {
 
-emb_gpt::impl* new_impl_avx512();
-
+void emb_gpt_avx512(const tensor& q_src,
+                    const tensor& k_src,
+                    const tensor& v_src,
+                    const tensor& k_past,
+                    const tensor& v_past,
+                    const tensor& q_dst,
+                    const tensor& k_dst,
+                    const tensor& v_dst,
+                    const tensor& cos,
+                    const tensor& sin,
+                    const tensor& position2d_ids);
 }

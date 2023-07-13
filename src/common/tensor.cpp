@@ -10,20 +10,20 @@
 #include <sstream>
 
 #include "bf16.hpp"
-#include "llm_plain_tensor.hpp"
+#include "llm_tensor.hpp"
 
 namespace llmdnn {
 
-plain_tensor::plain_tensor() {
+tensor::tensor() {
 }
 
-plain_tensor::~plain_tensor() {
+tensor::~tensor() {
     if (m_capacity && m_ptr)
         free(m_ptr);
 }
 
-plain_tensor plain_tensor::index(const std::initializer_list<tensor_index>& indices) const {
-    plain_tensor sub_tensor;
+tensor tensor::index(const std::initializer_list<tensor_index>& indices) const {
+    tensor sub_tensor;
     assert(indices.size() <= m_rank);
     int i_src = 0;
     int i_dst = 0;
@@ -46,12 +46,12 @@ plain_tensor plain_tensor::index(const std::initializer_list<tensor_index>& indi
     }
     sub_tensor.m_rank = i_dst;  // index may imply squeeze
     sub_tensor.m_ptr = reinterpret_cast<uint8_t*>(m_ptr) + off;
-    return sub_tensor;
+    return std::move(sub_tensor);
 }
 
 // slice: return a sub-view (w/o ownership/refcount to original data)
-plain_tensor plain_tensor::slice(int axis, int start, int end) const {
-    plain_tensor sub_tensor;
+tensor tensor::slice(int axis, int start, int end) const {
+    tensor sub_tensor;
     assert(axis < m_rank);
 
     sub_tensor.m_capacity = 0;
@@ -66,10 +66,10 @@ plain_tensor plain_tensor::slice(int axis, int start, int end) const {
     auto* data = reinterpret_cast<uint8_t*>(m_ptr) + off;
     sub_tensor.m_ptr = reinterpret_cast<void*>(data);
 
-    return sub_tensor;
+    return std::move(sub_tensor);
 }
 
-bool plain_tensor::is_dense() const {
+bool tensor::is_dense() const {
     // check if it's dense tensor
     size_t stride = m_element_size;
     for (int i = m_rank - 1; i >= 0; i--) {
@@ -96,17 +96,17 @@ bool plain_tensor::is_dense() const {
 
     simplified form is when whole tensor is dense
 */
-plain_tensor plain_tensor::reshape(const std::initializer_list<size_t>& target_shape) const {
+tensor tensor::reshape(const std::initializer_list<size_t>& target_shape) const {
     // only valid for dense memory
-    plain_tensor new_tensor_view;
+    tensor new_tensor_view;
     assert(is_dense());
     //assert(shape_size(target_shape) == shape_size(m_dims));
-    new_tensor_view.resize(std::vector<size_t>(target_shape), m_ptr, m_element_size);
+    new_tensor_view.resize(std::vector<size_t>(target_shape), m_ptr, m_element_size, m_dtype);
     return new_tensor_view;
 }
 
-plain_tensor plain_tensor::permute(const std::initializer_list<size_t>& order) const {
-    plain_tensor new_tensor_view;
+tensor tensor::permute(const std::initializer_list<size_t>& order) const {
+    tensor new_tensor_view;
     assert(order.size() == m_rank);
     new_tensor_view.m_capacity = 0;
     new_tensor_view.m_ptr = m_ptr;
@@ -122,11 +122,12 @@ plain_tensor plain_tensor::permute(const std::initializer_list<size_t>& order) c
     return new_tensor_view;
 }
 
-void plain_tensor::resize(const std::vector<size_t>& new_dims, void* data, size_t element_size) {
+void tensor::resize(const size_t* new_dims, size_t dim_num, void* data, size_t element_size, data_type_t dtype) {
     // initialize strides for compact/dense tensor
     m_element_size = element_size;
-    m_rank = new_dims.size();
-    assert(m_rank <= PLAINTENSOR_RANK_MAX);
+    m_dtype = dtype;
+    m_rank = dim_num;
+    assert(m_rank <= TENSOR_RANK_MAX);
     size_t stride = element_size;
     for (int i = m_rank - 1; i >= 0; i--) {
         m_dims[i] = new_dims[i];
@@ -147,7 +148,7 @@ void plain_tensor::resize(const std::vector<size_t>& new_dims, void* data, size_
     }
 }
 
-void plain_tensor::assert_dims(const std::initializer_list<size_t>& expect_dims) const {
+void tensor::assert_dims(const std::initializer_list<size_t>& expect_dims) const {
     if (m_rank != expect_dims.size()) {
         asm("int3");
         std::cout << "dims not same\n";

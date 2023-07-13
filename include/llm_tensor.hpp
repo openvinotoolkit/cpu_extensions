@@ -13,49 +13,85 @@
 #include <sstream>
 #include <memory.h>
 
-namespace llmdnn {
+#include "llm_types.hpp"
 
-#define PLAINTENSOR_RANK_MAX 8
-struct plain_tensor_base {
-    size_t m_strides[PLAINTENSOR_RANK_MAX];
-    size_t m_dims[PLAINTENSOR_RANK_MAX];
-    size_t m_rank;
-
-    void* m_ptr = nullptr;
-    size_t m_capacity = 0;
-    size_t m_element_size = 1;
-
-    operator bool() {
-        return m_ptr != nullptr;
-    }
-
-    size_t size(int i) {
-        assert(static_cast<size_t>(i) < m_rank);
-        return m_dims[i];
-    }
-    size_t stride(int i) {
-        assert(static_cast<size_t>(i) < m_rank);
-        return m_strides[i];
-    }
+// forward declaration
+namespace ov {
+class bfloat16;
 };
 
-struct plain_tensor : public plain_tensor_base {
-    plain_tensor();
-    ~plain_tensor();
-    plain_tensor(const plain_tensor&) = delete;
-    plain_tensor& operator = (const plain_tensor&) = delete;
-    plain_tensor(plain_tensor&& t) {
-        memcpy(reinterpret_cast<void*>(this), &t, sizeof(plain_tensor_base));
+namespace llmdnn {
+
+template <typename T>
+struct precision_of {
+    static constexpr data_type_t value = dnnl_data_type_undef;
+};
+
+template <>
+struct precision_of<float> {
+    static constexpr data_type_t value = dnnl_f32;
+};
+
+template <>
+struct precision_of<int32_t> {
+    static constexpr data_type_t value = dnnl_s32;
+};
+
+template <>
+struct precision_of<ov::bfloat16> {
+    static constexpr data_type_t value = dnnl_bf16;
+};
+
+template <>
+struct precision_of<uint8_t> {
+    static constexpr data_type_t value = dnnl_u8;
+};
+
+template <>
+struct precision_of<int8_t> {
+    static constexpr data_type_t value = dnnl_s8;
+};
+
+
+#define TENSOR_RANK_MAX 8
+struct tensor {
+    size_t m_strides[TENSOR_RANK_MAX];
+    size_t m_dims[TENSOR_RANK_MAX];
+    size_t m_rank = 0;
+
+    void* m_ptr = nullptr;
+    size_t m_capacity = 0;          // 0 means not own m_ptr
+    size_t m_element_size = 0;
+    data_type_t m_dtype = dnnl_data_type_undef;
+
+    tensor();
+    ~tensor();
+    tensor(const tensor&) = delete;
+    tensor& operator = (const tensor&) = delete;
+    tensor(tensor&& t) {
+        memcpy(reinterpret_cast<void*>(this), &t, sizeof(*this));
         t.m_capacity = 0;
         t.m_ptr = nullptr;
     }
-    plain_tensor& operator == (plain_tensor&& t) {
+    tensor& operator = (tensor&& t) {
         if (m_capacity && m_ptr)
             free(m_ptr);
-        memcpy(reinterpret_cast<void*>(this), &t, sizeof(plain_tensor_base));
+        memcpy(reinterpret_cast<void*>(this), &t, sizeof(*this));
         t.m_capacity = 0;
         t.m_ptr = nullptr;
         return *this;
+    }
+    operator bool() const {
+        return m_ptr != nullptr;
+    }
+
+    size_t size(int i) const {
+        assert(static_cast<size_t>(i) < m_rank);
+        return m_dims[i];
+    }
+    size_t stride(int i) const {
+        assert(static_cast<size_t>(i) < m_rank);
+        return m_strides[i];
     }
 
     struct tensor_index {
@@ -93,39 +129,31 @@ struct plain_tensor : public plain_tensor_base {
         }
     };
 
-    plain_tensor index(const std::initializer_list<tensor_index>& indices) const;
+    tensor index(const std::initializer_list<tensor_index>& indices) const;
 
     // slice: return a sub-view (w/o ownership/refcount to original data)
-    plain_tensor slice(int axis, int start, int end) const;
+    tensor slice(int axis, int start, int end) const;
 
     bool is_dense() const;
 
-    /*
-       suppose current shape is [a0,a1,...,am]
-       and target shape is [b0,b1,...,bn]
-       reshape is only valid when (a0*a1*...*am) == (b0*b1*...*bn) <======= (A)
+    tensor reshape(const std::initializer_list<size_t>& target_shape) const;
 
-       uniform a tensor's shape into groups from last to first, the dimension is merged
-       into current group if the subtensor in the group is still dense after merge.
-       otherwise a new group is formed.
+    tensor permute(const std::initializer_list<size_t>& order) const;
 
-       then reshape is performed on group basis, the check (A) is performed on group bases.
-       which means any reshape inside the group is OK, but not across the group boundary.
-
-       this can be done in one-loop, while group is forming, and checks are performed.
-
-       simplified form is when whole tensor is dense
-    */
-    plain_tensor reshape(const std::initializer_list<size_t>& target_shape) const;
-
-    plain_tensor permute(const std::initializer_list<size_t>& order) const;
+    template<typename DT>
+    void resize(const size_t* new_dims, size_t dim_num, DT* data = nullptr) {
+        resize(new_dims, dim_num, data, sizeof(DT), precision_of<DT>::value);
+    }
 
     template<typename DT>
     void resize(const std::vector<size_t>& new_dims, DT* data = nullptr) {
-        resize(new_dims, data, sizeof(DT));
+        resize(new_dims.data(), new_dims.size(), data);
     }
 
-    void resize(const std::vector<size_t>& new_dims, void* data, size_t element_size);
+    void resize(const size_t* new_dims, size_t dim_num, void* data, size_t element_size, data_type_t dtype);
+    void resize(const std::vector<size_t>& new_dims, void* data, size_t element_size, data_type_t dtype) {
+        resize(new_dims.data(), new_dims.size(), data, element_size, dtype);
+    }
 
     template<typename DT>
     DT* data() const {
@@ -213,11 +241,11 @@ struct plain_tensor : public plain_tensor_base {
     }
 
     template <typename U>
-    friend std::ostream& operator<<(std::ostream& os, const plain_tensor& dt);    
+    friend std::ostream& operator<<(std::ostream& os, const tensor& dt);    
 };
 
 template <typename U>
-std::ostream& operator<<(std::ostream& os, const plain_tensor& dt) {
+std::ostream& operator<<(std::ostream& os, const tensor& dt) {
     os << dt.repr<U>();
     return os;
 }

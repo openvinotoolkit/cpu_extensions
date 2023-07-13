@@ -8,54 +8,21 @@
 #include <string>
 #include <vector>
 #include "llm_types.hpp"
+#include "llm_tensor.hpp"
 
 namespace llmdnn {
 
-class emb_gpt {
-public:
-    struct create_param {
-        size_t num_heads;
-        size_t head_size;
-        size_t head_size_aligned;       // better to aligned to 64 bytes for best performance, apply for qkv
-        // supported (qkv, dst): (bf16, bf16)
-        data_type_t qkv_precision;
-        data_type_t dst_precision;
-        size_t rotary_dims;
-        bool use_position2d;            // chatglm true, other false
-    };
-    struct exec_param {
-        size_t batch;
-        size_t query_seq_len;
-        size_t past_seq_len;
-        uint8_t* q;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldq
-        uint8_t* k;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldk
-        uint8_t* v;                         // shape: [batch, query_seq_len, hidden size], inner stride is ldv
-        size_t ldq;                         // inner stride of q
-        size_t ldk;                         // inner stride of k
-        size_t ldv;                         // inner stride of v
-        uint8_t* query_dst;                 // rotary embbeding dst
-        uint8_t** layer_past_key_src;       // past key src
-        uint8_t** layer_past_value_src;     // past value src
-        uint8_t** layer_past_key_dst;       // past key dst, if layer_past_key_src!=layer_past_key_dst, will copy layer_past_key_src to layer_past_key_dst
-        uint8_t** layer_past_value_dst;     // past value dst, if layer_past_value!=layer_past_value_dst, will copy layer_past_value to layer_past_value_dst
-        float* cos;                         // cos lookup table, shape: [max_seq_len, rotary_dims]
-        float* sin;                         // sin lookup table, shape: [max_seq_len, rotary_dims]
-        int* position2d_ids;                // shape: [batch, 2, query_seq_len]
-        size_t head_stride_in_kv;           // kv stride for next head; kv may be preallocated a big buffer
-    };
-
-    emb_gpt();
-    ~emb_gpt();
-    bool create(const create_param& param);
-    void exec(const exec_param& param);
-
-    struct impl {
-        virtual ~impl() {}
-        virtual bool create(const create_param& param) = 0;
-        virtual void exec(const exec_param& param) = 0;
-    };
-protected:
-    impl* _impl;
-};
+void emb_gpt(const tensor& q_src,              // q shape: [batch, query_seq_len, head_num, head_size]
+             const tensor& k_src,              // k shape: [batch, query_seq_len, head_num, head_size]
+             const tensor& v_src,              // v shape: [batch, query_seq_len, head_num, head_size]
+             const tensor& k_past,             // k_past shape: [batch, num_heads, past_seq_len, head_size]
+             const tensor& v_past,             // v_past shape: [batch, num_heads, past_seq_len, head_size]
+             const tensor& q_dst,              // q_dst, shape: [batch, num_heads, query_seq_len, head_size]
+             const tensor& k_dst,              // k_past shape: [batch, num_heads, query_seq_len+past_seq_len, head_size]
+                                               // if k_past!=k_past_dst, will copy k_past to k_past_dst
+             const tensor& v_dst,              // v_past shape: [batch, num_heads, query_seq_len+past_seq_len, head_size]
+             const tensor& cos,                // cos lookup table, shape: [1, 1, max_seq_len, rotary_dims]
+             const tensor& sin,                // sin lookup table, shape: [1, 1, max_seq_len, rotary_dims]
+             const tensor& position2d_ids);    // shape: [batch, 2, query_seq_len]
 
 }

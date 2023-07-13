@@ -105,25 +105,11 @@ class GPTNeoXAttention(nn.Module):
         return attn_output, attn_weights
 
 class GPTNeoXAttentionExt:
-    def __init__(self, num_attention_heads, hidden_size, max_position_embeddings, is_int8=False):
+    def __init__(self):
         self.mha = ld.mha_gpt()
-        num_heads = num_attention_heads
-        head_size = hidden_size // num_attention_heads
-        max_seq_len = max_position_embeddings
 
-        head_size_aligned = head_size
-        normal_factor = 1.0 / math.sqrt(head_size)
-        qkv_precision_name = 's8' if is_int8 else 'bf16'
-        dst_precision_name = 's8' if is_int8 else 'bf16'
-        self.mha.create(num_heads, head_size, normal_factor, qkv_precision_name,
-                dst_precision_name, max_seq_len)
-
-    def forward(self, query, key, value, attention_mask):
-        return self.mha.exec(query, key, value, torch.tensor([]), attention_mask)
-
-    def forward_quant(self, query, key, value, attention_mask, q_quant, k_quant, qk_quant, v_quant, requant):
-        # q_dequant, k_dequant, v_dequant, qk_quant, std::vector<float>& qkv_quant
-        return self.mha.exec_quant(query, key, value, attention_mask, 1.0 / q_quant, 1.0 / k_quant, 1.0 / v_quant, qk_quant, requant)
+    def forward(self, query, key, value, attention_mask, normal_factor):
+        return self.mha.exec(query, key, value, torch.tensor([]), attention_mask, normal_factor, True)
 
 HEAD_NUM = 32
 SIZE_PER_HEAD = 80
@@ -161,7 +147,7 @@ def test_gpt_neox():
          np.zeros([2, 1, 1, 200], dtype=np.float32)),
     ]
     ref_net = get_ref_model()
-    net = GPTNeoXAttentionExt(HEAD_NUM, HIDDEN_SIZE, MAX_POSITION_EMBEDDINGS)
+    net = GPTNeoXAttentionExt()
     with torch.cpu.amp.autocast():
         for (i, input) in enumerate(inputs):
             q, k, v, attn_mask = input
@@ -171,67 +157,8 @@ def test_gpt_neox():
             attn_mask = torch.from_numpy(attn_mask)
             attn_mask[:,:,:,-2:] = torch.finfo(torch.float32).min
             ref_output = ref_net.forward(q, k, v, attn_mask)
-            output = net.forward(q, k, v, attn_mask)
+            output = net.forward(q, k, v, attn_mask, normal_factor = 1.0 / math.sqrt(SIZE_PER_HEAD))
             if not torch.allclose(ref_output, output, rtol=0.001, atol=0.01):
-                print(f"error at index {i} ref:\n{ref_output} \ncur:\n {output} ")
-                assert(False)
-
-    print('done.')
-    return
-
-def test_gpt_neox_int8():
-    low = -4
-    high = 4
-    range_ = high - low
-    q_quant = 127.0 / high
-    qs = [
-            np.random.random(size=[2, HEAD_NUM, 900, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-            np.random.random(size=[2, HEAD_NUM , 1, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-            np.random.random(size=[2, HEAD_NUM , 1, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-        ]
-    low = -2
-    high = 2
-    range_ = high - low
-    k_quant = 127.0 / high
-    ks = [
-            np.random.random(size=[2, HEAD_NUM, 900, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-            np.random.random(size=[2, HEAD_NUM, 901, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-            np.random.random(size=[2, HEAD_NUM, 902, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-        ]
-    low = -8
-    high = 8
-    range_ = high - low
-    v_quant = 127.0 / high
-    vs = [
-            np.random.random(size=[2, HEAD_NUM, 900, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-            np.random.random(size=[2, HEAD_NUM, 901, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-            np.random.random(size=[2, HEAD_NUM, 902, SIZE_PER_HEAD]).astype(np.float32)*range_+low,
-        ]
-    # q, k, v, attn_mask
-    # q: [batch, num_heads, query_seq_len, head_size]
-    # k: [batch, num_heads, key_seq_len, head_size]
-    # v: [batch, num_heads, value_seq_len, head_size]
-    # attn: [batch, 1, 1, key_seq_len]
-    inputs = []
-    for i in range(len(qs)):
-        inputs.append((qs[i], ks[i], vs[i], np.zeros([ks[i].shape[0], 1, 1, ks[i].shape[-2]], dtype=np.float32)))
-    
-    ref_net = get_ref_model()
-    net = GPTNeoXAttentionExt(HEAD_NUM, HIDDEN_SIZE, MAX_POSITION_EMBEDDINGS, True)
-    qk_quant, requant = 255.0, 10.0
-    with torch.cpu.amp.autocast():
-        for (i, input) in enumerate(inputs):
-            q, k, v, attn_mask = input
-            q = torch.from_numpy(q)
-            k = torch.from_numpy(k)
-            v = torch.from_numpy(v)
-            attn_mask = torch.from_numpy(attn_mask)
-            q = (q * q_quant).round().clamp(-128, 127).to(torch.int8)
-            k = (k * k_quant).round().clamp(-128, 127).to(torch.int8)
-            v = (v * v_quant).round().clamp(-128, 127).to(torch.int8)
-            ref_output = ref_net.forward(q, k, v, attn_mask, q_quant, k_quant, qk_quant, v_quant, requant)
-            output = net.forward_quant(q, k, v, attn_mask, q_quant, k_quant, qk_quant, v_quant, [requant,])
-            if (torch.abs(ref_output- output) > 2).any():
                 print(f"error at index {i} ref:\n{ref_output} \ncur:\n {output} ")
                 assert(False)
 
@@ -240,4 +167,3 @@ def test_gpt_neox_int8():
 
 if __name__ == "__main__":
     test_gpt_neox()
-    test_gpt_neox_int8()

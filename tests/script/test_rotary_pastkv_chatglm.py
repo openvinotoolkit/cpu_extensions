@@ -250,16 +250,11 @@ class SelfAttention(torch.nn.Module):
 
 class GPTNeoXAttentionExt:
     def __init__(self, num_attention_heads, hidden_size, head_size_aligned, max_position_embeddings, rotary_emb_base, rotary_pct, is_int8=False):
-        self.emd = ld.emb_gpt()
         num_heads = num_attention_heads
         head_size = hidden_size // num_attention_heads
         max_seq_len = max_position_embeddings
 
-        qkv_precision_name = 's8' if is_int8 else 'bf16'
-        dst_precision_name = 's8' if is_int8 else 'bf16'
         rotary_ndims = int(head_size * rotary_pct)
-        self.emd.create(num_heads, head_size, head_size_aligned, qkv_precision_name,
-                dst_precision_name, rotary_ndims, True)
 
         inv_freq = 1. / (rotary_emb_base ** (torch.arange(0, rotary_ndims, 2).float() / rotary_ndims))
         #inv_freq = inv_freq.half()
@@ -273,8 +268,8 @@ class GPTNeoXAttentionExt:
         freqs = torch.einsum("i,j->ij", t, inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.cos_cached = emb.cos()[:, None, :]
-        self.sin_cached = emb.sin()[:, None, :]
+        self.cos_cached = emb.cos()[None, None, :, :]
+        self.sin_cached = emb.sin()[None, None, :, :]
 
     # qkv: [batch, seq_len, (num_heads * 3 * head_size)]
     # layer_past_padded: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
@@ -284,13 +279,13 @@ class GPTNeoXAttentionExt:
     #       1: query: [batch, num_attention_heads, seq_len, head_size_aligned]
     #       2: k: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
     #       3: v: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
-    def forward(self, qkv, layer_past_key_src, layer_past_value_src, layer_past_key_dst, layer_past_value_dst, query_padded, past_seq_len, position_ids):
-        self.emd.exec_position(qkv, layer_past_key_src, layer_past_value_src, layer_past_key_dst, layer_past_value_dst, query_padded, past_seq_len, position_ids, self.cos_cached, self.sin_cached)
+    def forward(self, qkv, k_past, v_past, position_ids):
+        return ld.emb_gpt(qkv, k_past, v_past, self.cos_cached, self.sin_cached, position_ids)
 
 
 HEAD_NUM = 32
 SIZE_PER_HEAD = 80
-SIZE_PER_HEAD_ALIGN = 96
+SIZE_PER_HEAD_ALIGN = 80
 HIDDEN_SIZE = HEAD_NUM * SIZE_PER_HEAD
 MAX_POSITION_EMBEDDINGS = 1024 #2048
 ROTARY_EMB_BASE = 10000
@@ -321,8 +316,6 @@ def test_chatglm():
             qkv = torch.from_numpy(qkv).to(torch.bfloat16)
             layer_past_key = torch.from_numpy(layer_past_key).to(torch.bfloat16)
             layer_past_value = torch.from_numpy(layer_past_value).to(torch.bfloat16)
-            past_seq_len = layer_past_key.shape[-2]
-            shape = list(layer_past_key.shape)
 
             if qkv.size(1) > 1:
                 seq_batch1 = torch.arange(end=qkv.size(1) - 1, dtype=torch.int32)
@@ -339,15 +332,11 @@ def test_chatglm():
             key_ref = key_ref.to(dtype=torch.bfloat16)
             
             # no prealloc past kv
-            layer_past_key_seq = torch.zeros(key_ref.shape, dtype=torch.bfloat16)
-            layer_past_value_seq = torch.zeros(value_ref.shape, dtype=torch.bfloat16)
-            query_seq = torch.zeros(query_ref.shape, dtype=torch.bfloat16)
-            net_seq.forward(qkv, layer_past_key, layer_past_value, layer_past_key_seq, layer_past_value_seq, query_seq, past_seq_len, seq_ids)
-            query, key, value = query_seq, layer_past_key_seq, layer_past_value_seq
+            query, key, value = net_seq.forward(qkv, layer_past_key, layer_past_value, seq_ids)
             # check query
             if not torch.allclose(query_ref, query, rtol=0.001, atol=0.01):
                 print(f"error at sequence query index {i} ref:\n{query_ref} \ncur:\n {query} ")
-                #assert(False)
+                assert(False)
             # check key
             if not torch.allclose(key_ref, key, rtol=0.001, atol=0.01):
                 print(f"error at sequence key index {i} ref:\n{key_ref} \ncur:\n {key} ")
@@ -355,31 +344,6 @@ def test_chatglm():
             # check value
             if not torch.allclose(value_ref, value, rtol=0.001, atol=0.01):
                 print(f"error at sequence value index {i} ref:\n{value_ref} \ncur:\n {value} ")
-                assert(False)
-
-            # prealloc past kv
-            shape[-2] = MAX_SEQ_LEN
-            shape[-1] = SIZE_PER_HEAD_ALIGN
-            layer_past_key_padded = torch.zeros(shape, dtype=torch.bfloat16)
-            layer_past_value_padded = torch.zeros(shape, dtype=torch.bfloat16)
-            query_shape = list(shape)
-            query_shape[2] = qkv.shape[1]
-            query_padded = torch.zeros(query_shape, dtype=torch.bfloat16)
-            layer_past_key_padded[:,:,:layer_past_key.shape[-2],:layer_past_key.shape[-1]] = layer_past_key
-            layer_past_value_padded[:,:,:layer_past_key.shape[-2],:layer_past_key.shape[-1]] = layer_past_value
-            net.forward(qkv, layer_past_key_padded, layer_past_value_padded, layer_past_key_padded, layer_past_value_padded, query_padded, past_seq_len, seq_ids)
-            query, key, value = query_padded, layer_past_key_padded, layer_past_value_padded
-            # check query
-            if not torch.allclose(query_ref, query[:,:,:,:query_ref.shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at query index {i} ref:\n{query_ref} \ncur:\n {query} ")
-                assert(False)
-            # check key
-            if not torch.allclose(key_ref, key[:,:,:key_ref.shape[-2],:key_ref.shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at key index {i} ref:\n{key_ref} \ncur:\n {key} ")
-                assert(False)
-            # check value
-            if not torch.allclose(value_ref, value[:,:,:value_ref.shape[-2],:value_ref.shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at value index {i} ref:\n{value_ref} \ncur:\n {value} ")
                 assert(False)
 
     print('done.')

@@ -108,16 +108,11 @@ class GPTNeoXAttention(nn.Module):
 
 class GPTNeoXAttentionExt:
     def __init__(self, num_attention_heads, hidden_size, head_size_aligned, max_position_embeddings, rotary_emb_base, rotary_pct, is_int8=False):
-        self.emd = ld.emb_gpt()
         num_heads = num_attention_heads
         head_size = hidden_size // num_attention_heads
         max_seq_len = max_position_embeddings
 
-        qkv_precision_name = 's8' if is_int8 else 'bf16'
-        dst_precision_name = 's8' if is_int8 else 'bf16'
         rotary_ndims = int(head_size * rotary_pct)
-        self.emd.create(num_heads, head_size, head_size_aligned, qkv_precision_name,
-                dst_precision_name, rotary_ndims)
 
         inv_freq = 1.0 / (rotary_emb_base ** (torch.arange(0, rotary_ndims, 2).float() / rotary_ndims))
 
@@ -138,13 +133,13 @@ class GPTNeoXAttentionExt:
     #       1: query: [batch, num_attention_heads, seq_len, head_size_aligned]
     #       2: k: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
     #       3: v: [batch, num_attention_heads, MAX_SEQ_LEN, head_size_aligned]
-    def forward(self, qkv, layer_past_key_padded, layer_past_value_padded, query_padded, past_seq_len):
-        self.emd.exec(qkv, layer_past_key_padded, layer_past_value_padded, query_padded, past_seq_len, self.cos_cached, self.sin_cached)
+    def forward(self, qkv, k_past, v_past):
+        return ld.emb_gpt(qkv, k_past, v_past, self.cos_cached, self.sin_cached, torch.tensor([]))
 
 
 HEAD_NUM = 32
 SIZE_PER_HEAD = 80
-SIZE_PER_HEAD_ALIGN = 96
+SIZE_PER_HEAD_ALIGN = 80
 HIDDEN_SIZE = HEAD_NUM * SIZE_PER_HEAD
 MAX_POSITION_EMBEDDINGS = 1024 #2048
 ROTARY_EMB_BASE = 10000
@@ -180,42 +175,26 @@ def test_gpt_neox():
         for (i, input) in enumerate(inputs):
             qkv, layer_past_key, layer_past_value = input
             qkv = torch.from_numpy(qkv).to(torch.bfloat16)
-            past_seq_len = layer_past_key.shape[-2]
-            shape = list(layer_past_key.shape)
-            shape[-2] = MAX_SEQ_LEN
-            shape[-1] = SIZE_PER_HEAD_ALIGN
-            layer_past_key_padded = torch.zeros(shape, dtype=torch.bfloat16)
-            layer_past_value_padded = torch.zeros(shape, dtype=torch.bfloat16)
-            query_shape = list(shape)
-            query_shape[2] = qkv.shape[1]
-            query_padded = torch.zeros(query_shape, dtype=torch.bfloat16)
             layer_past_key = torch.from_numpy(layer_past_key).to(torch.bfloat16)
             layer_past_value = torch.from_numpy(layer_past_value).to(torch.bfloat16)
-            layer_past_key_padded[:,:,:layer_past_key.shape[-2],:layer_past_key.shape[-1]] = layer_past_key
-            layer_past_value_padded[:,:,:layer_past_key.shape[-2],:layer_past_key.shape[-1]] = layer_past_value
-            ref_output, query_ref, key_ref, value_ref = ref_net.forward(qkv, (layer_past_key, layer_past_value))
+
+            _, query_ref, key_ref, value_ref = ref_net.forward(qkv, (layer_past_key, layer_past_value))
             query_ref = query_ref.to(dtype=torch.bfloat16)
             key_ref = key_ref.to(dtype=torch.bfloat16)
-            net.forward(qkv, layer_past_key_padded, layer_past_value_padded, query_padded, past_seq_len)
-            output, query, key, value = (layer_past_key_padded, layer_past_value_padded), query_padded, layer_past_key_padded, layer_past_value_padded
-            # check output
-            if not torch.allclose(ref_output[0].to(dtype=torch.bfloat16), output[0][:,:,:ref_output[0].shape[-2],:ref_output[0].shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at past key index {i} ref:\n{ref_output[0]} \ncur:\n {output[0]} ")
-                assert(False)
-            if not torch.allclose(ref_output[1], output[1][:,:,:ref_output[1].shape[-2],:ref_output[1].shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at past value index {i} ref:\n{ref_output[1]} \ncur:\n {output[1]} ")
-                assert(False)
+            
+            # no prealloc past kv
+            query, key, value = net.forward(qkv, layer_past_key, layer_past_value)
             # check query
-            if not torch.allclose(query_ref, query[:,:,:,:query_ref.shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at query index {i} ref:\n{query_ref} \ncur:\n {query} ")
+            if not torch.allclose(query_ref, query, rtol=0.001, atol=0.01):
+                print(f"error at sequence query index {i} ref:\n{query_ref} \ncur:\n {query} ")
                 assert(False)
             # check key
-            if not torch.allclose(key_ref, key[:,:,:key_ref.shape[-2],:key_ref.shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at key index {i} ref:\n{key_ref} \ncur:\n {key} ")
+            if not torch.allclose(key_ref, key, rtol=0.001, atol=0.01):
+                print(f"error at sequence key index {i} ref:\n{key_ref} \ncur:\n {key} ")
                 assert(False)
             # check value
-            if not torch.allclose(value_ref, value[:,:,:value_ref.shape[-2],:value_ref.shape[-1]], rtol=0.001, atol=0.01):
-                print(f"error at value index {i} ref:\n{value_ref} \ncur:\n {value} ")
+            if not torch.allclose(value_ref, value, rtol=0.001, atol=0.01):
+                print(f"error at sequence value index {i} ref:\n{value_ref} \ncur:\n {value} ")
                 assert(False)
 
     print('done.')

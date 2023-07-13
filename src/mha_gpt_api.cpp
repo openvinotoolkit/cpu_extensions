@@ -17,12 +17,8 @@ mha_gpt::~mha_gpt() {
     delete _impl;
 }
 
-bool mha_gpt::create(const create_param& param) {
-    return _impl->create(param);
-}
-
-void mha_gpt::exec(const exec_param& param) {
-    _impl->exec(param);
+void mha_gpt::exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, float normal_factor, bool use_causal_mask) {
+    _impl->exec(q, k, v, output, attn_mask, alibi, normal_factor, use_causal_mask);
 }
 
 }

@@ -9,20 +9,18 @@
 
 namespace llmdnn {
 
-// interface
-emb_gpt::emb_gpt(): _impl(new_impl_avx512()) {
-}
-
-emb_gpt::~emb_gpt() {
-    delete _impl;
-}
-
-bool emb_gpt::create(const create_param& param) {
-    return _impl->create(param);
-}
-
-void emb_gpt::exec(const exec_param& param) {
-    _impl->exec(param);
+void emb_gpt(const tensor& q_src,
+             const tensor& k_src,
+             const tensor& v_src,
+             const tensor& k_past,
+             const tensor& v_past,
+             const tensor& q_dst,
+             const tensor& k_dst,
+             const tensor& v_dst,
+             const tensor& cos,
+             const tensor& sin,
+             const tensor& position2d_ids) {
+    emb_gpt_avx512(q_src, k_src, v_src, k_past, v_past, q_dst, k_dst, v_dst, cos, sin, position2d_ids);
 }
 
 }

@@ -16,5 +16,4 @@ PYBIND11_MODULE(llmdnn, m) {
     }
     regclass_mha_gpt(m);
     regclass_emb_gpt(m);
-    regclass_attn_gpt(m);
 }
