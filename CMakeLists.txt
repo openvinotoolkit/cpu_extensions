@@ -13,7 +13,6 @@ message(INFO "--------------------------------")
 message(STATUS "Build with tests: ${CPU_EXTENSIONS_BUILD_TESTS}")
 message(INFO "--------------------------------")
 
-set(CMAKE_CXX_STANDARD 17)
 if(MSVC)
   # TODO: validate
   if(MSVC_VERSION VERSION_LESS 1928)

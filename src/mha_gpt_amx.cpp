@@ -4,11 +4,11 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 #include "common/simple_parallel.hpp"
 #include "common/tensor2d.hpp"
 #include "common/utility.hpp"
+#include "common/compatible.hpp"
 #include "llm_types.hpp"
 #include "utility_kernel_avx512.hpp"
 #include "mm_kernel_common_amx.hpp"
@@ -22,6 +22,8 @@ using namespace ov::cpu;
 namespace llmdnn {
 
 struct mha_gpt_impl_amx : public mha_gpt::impl {
+    mha_gpt_impl_amx() = default;
+    ~mha_gpt_impl_amx();
     void create(data_type_t in_type, size_t seq_len, size_t head_size, bool is_bloom);
     void exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, float normal_factor, bool use_causal_mask) override;
 
@@ -32,17 +34,30 @@ struct mha_gpt_impl_amx : public mha_gpt::impl {
     size_t _buffer_mat1_out_size = 0;
     size_t _num_threads = 0;
 
-    std::shared_ptr<uint8_t> _buffer_mat0_out;
-    std::shared_ptr<uint8_t> _buffer_mat1_out;
+    uint8_t* _buffer_mat0_out = nullptr;
+    uint8_t* _buffer_mat1_out = nullptr;
 
-    std::vector<std::shared_ptr<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>>> gemAvB_BF16xBF16;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> qKtrGemm_BF16xBF16;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> qKVGemm_BF16xBF16;
-
-    std::vector<std::shared_ptr<amx_kernel::Matmul<int8_t, int8_t>>> qKtrGemm_i8xi8;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<uint8_t, int8_t>>> qKVGemm_u8xi8;
-    std::vector<std::shared_ptr<amx_kernel::MatmulVector<int8_t, int8_t>>> gemAvB_i8xi8;
+    llm_vector<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>*> gemAvB_BF16xBF16;
+    llm_vector<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>*> qKtrGemm_BF16xBF16;
+    llm_vector<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>*> qKVGemm_BF16xBF16;
 };
+
+mha_gpt_impl_amx::~mha_gpt_impl_amx() {
+    for (size_t i = 0; i < gemAvB_BF16xBF16.size(); i++) {
+        delete gemAvB_BF16xBF16[i];
+    }
+    for (size_t i = 0; i < qKtrGemm_BF16xBF16.size(); i++) {
+        delete qKtrGemm_BF16xBF16[i];
+    }
+    for (size_t i = 0; i < qKVGemm_BF16xBF16.size(); i++) {
+        delete qKVGemm_BF16xBF16[i];
+    }
+
+    if (_buffer_mat0_out)
+        free(_buffer_mat0_out);
+    if (_buffer_mat1_out)
+        free(_buffer_mat1_out);
+}
 
 void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_size, bool is_bloom) {
     // q: [batch, head_num, query_seq_len, head_size]
@@ -53,34 +68,18 @@ void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_s
     // attn_output: [batch, query_seq_len, head_num * head_size]
     if (_num_threads == 0) {
         _num_threads = getTotalThreads();
-        if (in_type == dnnl_s8) {
-            _head_size_aligned = rndup(head_size, 64);
-            qKtrGemm_i8xi8.resize(_num_threads);
-            for (size_t i = 0; i < _num_threads; i++) {
-                qKtrGemm_i8xi8[i] = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(false, !is_bloom);
-            }
-            qKVGemm_u8xi8.resize(_num_threads);
-            for (size_t i = 0; i < _num_threads; i++) {
-                qKVGemm_u8xi8[i] = std::make_shared<amx_kernel::Matmul<uint8_t, int8_t>>(false, false);
-            }
-            gemAvB_i8xi8.resize(_num_threads);
-            for (size_t i = 0; i < _num_threads; i++) {
-                gemAvB_i8xi8[i] = std::make_shared<amx_kernel::MatmulVector<int8_t, int8_t>>();
-            }
-        } else {
-            _head_size_aligned = rndup(head_size, 32);
-            gemAvB_BF16xBF16.resize(_num_threads);
-            for (size_t i = 0; i < _num_threads; i++) {
-                gemAvB_BF16xBF16[i] = std::make_shared<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>>();
-            }
-            qKtrGemm_BF16xBF16.resize(_num_threads);
-            for (size_t i = 0; i < _num_threads; i++) {
-                qKtrGemm_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(false, !is_bloom);
-            }
-            qKVGemm_BF16xBF16.resize(_num_threads);
-            for (size_t i = 0; i < _num_threads; i++) {
-                qKVGemm_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(false, false);
-            }
+        _head_size_aligned = rndup(head_size, 32);
+        gemAvB_BF16xBF16.resize(_num_threads);
+        for (size_t i = 0; i < _num_threads; i++) {
+            gemAvB_BF16xBF16[i] = new amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>();
+        }
+        qKtrGemm_BF16xBF16.resize(_num_threads);
+        for (size_t i = 0; i < _num_threads; i++) {
+            qKtrGemm_BF16xBF16[i] = new amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>(false, !is_bloom);
+        }
+        qKVGemm_BF16xBF16.resize(_num_threads);
+        for (size_t i = 0; i < _num_threads; i++) {
+            qKVGemm_BF16xBF16[i] = new amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>(false, false);
         }
     }
 
@@ -88,15 +87,15 @@ void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_s
     if (buffer_mat0_out_size > _buffer_mat0_out_size) {
         _buffer_mat0_out_size = seq_len * rndup(seq_len * sizeof(float), 64) * 3 / 2;
         _buffer_mat1_out_size = seq_len * _head_size_aligned * sizeof(float) * 3 / 2;
+        if (_buffer_mat0_out)
+            free(_buffer_mat0_out);
+        if (_buffer_mat1_out)
+            free(_buffer_mat1_out);
 
-        _buffer_mat0_out = std::shared_ptr<uint8_t>(
-                                reinterpret_cast<uint8_t*>(aligned_alloc(64, _num_threads * _buffer_mat0_out_size)),
-                                [](void * p) { ::free(p); });
-        memset(_buffer_mat0_out.get(), 0, _num_threads * _buffer_mat0_out_size);
-        _buffer_mat1_out = std::shared_ptr<uint8_t>(
-                                reinterpret_cast<uint8_t*>(aligned_alloc(64, _num_threads * _buffer_mat1_out_size)),
-                                [](void * p) { ::free(p); });
-        memset(_buffer_mat1_out.get(), 0, _num_threads * _buffer_mat1_out_size);
+        _buffer_mat0_out = reinterpret_cast<uint8_t*>(aligned_alloc(64, _num_threads * _buffer_mat0_out_size));
+        memset(_buffer_mat0_out, 0, _num_threads * _buffer_mat0_out_size);
+        _buffer_mat1_out = reinterpret_cast<uint8_t*>(aligned_alloc(64, _num_threads * _buffer_mat1_out_size));
+        memset(_buffer_mat1_out, 0, _num_threads * _buffer_mat1_out_size);
     }
 }
 
@@ -125,8 +124,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
             auto k_sub = &k.at<uint8_t>({i0, i1});
             auto v_sub = &v.at<uint8_t>({i0, i1});
 
-            auto mat0_out = reinterpret_cast<uint8_t*>(_buffer_mat0_out.get() + thread_id * _buffer_mat0_out_size);
-            auto mat1_out = reinterpret_cast<uint8_t*>(_buffer_mat1_out.get() + thread_id * _buffer_mat1_out_size);
+            auto mat0_out = reinterpret_cast<uint8_t*>(_buffer_mat0_out + thread_id * _buffer_mat0_out_size);
+            auto mat1_out = reinterpret_cast<uint8_t*>(_buffer_mat1_out + thread_id * _buffer_mat1_out_size);
 
             tensor2D<ov::bfloat16> matK(key_seq_len, head_size, reinterpret_cast<ov::bfloat16*>(k_sub), k.m_strides[2]);
             // N: key_seq_len, K: head_size
@@ -172,8 +171,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 auto k_sub = &k.at<ov::bfloat16>({i0, i1});
                 auto v_sub = &v.at<ov::bfloat16>({i0, i1});
 
-                auto mat0_out = reinterpret_cast<float*>(_buffer_mat0_out.get() + thread_id * _buffer_mat0_out_size);
-                auto mat1_out = reinterpret_cast<float*>(_buffer_mat1_out.get() + thread_id * _buffer_mat1_out_size);
+                auto mat0_out = reinterpret_cast<float*>(_buffer_mat0_out + thread_id * _buffer_mat0_out_size);
+                auto mat1_out = reinterpret_cast<float*>(_buffer_mat1_out + thread_id * _buffer_mat1_out_size);
                 
                 tensor2D<ov::bfloat16> matQ(seq_cout, head_size, q_sub, q.m_strides[2]);
                 tensor2D<float> matQK(seq_cout, key_seq_len, mat0_out, rndup(key_seq_len * sizeof(float), 64));
@@ -210,7 +209,7 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 } else {
                     // [batch, 1, 1, key_seq_len] or [batch, 1, query_seq_len, key_seq_len]
                     for (int m = 0; m < seq_cout; m++) {
-                        auto attn_sub = &attn_mask.at<float>({i0, 0, attn_mask.m_dims[2] == 1 ? 0 : m + seq_start}); // s  + i0 * key_seq_len * query_seq_len;
+                        auto attn_sub = &attn_mask.at<float>({i0, 0, attn_mask.m_dims[2] == 1 ? 0 : m + seq_start});
                         float* src = &matQK(m, 0);
                         ov::bfloat16* dst = &softmax_dst(m, 0);
                         if (!alibi)

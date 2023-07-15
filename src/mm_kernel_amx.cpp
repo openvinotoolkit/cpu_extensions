@@ -1,18 +1,13 @@
 // Copyright (C) 2018-2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <memory>
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <string.h>
 #include <vector>
 #include <chrono>
 #include <iostream>
-#include <fstream>
-#include <sstream>
 #include <cassert>
-#include <cstring>
-#include <thread>
 
 #include "llm_mm.hpp"
 #include "mm_kernel_common_amx.hpp"
@@ -23,12 +18,12 @@ namespace llmdnn {
 
 using ov::bfloat16;
 struct mm_kernel {
-    std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>> bf16xbf16;
-    std::shared_ptr<amx_kernel::Matmul<int8_t, int8_t>> i8xi8;
-    std::shared_ptr<amx_kernel::Matmul<uint8_t, int8_t>> u8xi8;
+    std::unique_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>> bf16xbf16;
+    std::unique_ptr<amx_kernel::Matmul<int8_t, int8_t>> i8xi8;
+    std::unique_ptr<amx_kernel::Matmul<uint8_t, int8_t>> u8xi8;
 
-    std::shared_ptr<amx_kernel::MatmulVector<int8_t, int8_t>> i8xi8_gemv;
-    std::shared_ptr<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>> bf16xbf16_gemv;
+    std::unique_ptr<amx_kernel::MatmulVector<int8_t, int8_t>> i8xi8_gemv;
+    std::unique_ptr<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>> bf16xbf16_gemv;
 
     data_type_t dt_a;
     data_type_t dt_b;
@@ -46,20 +41,20 @@ bool mm_kernel_create_amx(mm_kernel** mm, const mm_create_param* param) {
     m = new mm_kernel;
     if (param->b_is_gemv) {
         if (param->dt_a == dnnl_s8 && param->dt_b == dnnl_s8) {
-            m->i8xi8_gemv = std::make_shared<amx_kernel::MatmulVector<int8_t, int8_t>>();
+            m->i8xi8_gemv = std::make_unique<amx_kernel::MatmulVector<int8_t, int8_t>>();
         } else if (param->dt_a == dnnl_bf16 && param->dt_b == dnnl_bf16) {
-            m->bf16xbf16_gemv = std::make_shared<amx_kernel::MatmulVector<bfloat16, bfloat16>>();
+            m->bf16xbf16_gemv = std::make_unique<amx_kernel::MatmulVector<bfloat16, bfloat16>>();
         } else {
             std::cout << "mm_kernel_create: unsupport gemv input type, a: " << param->dt_a << ", b: " << param->dt_b << ".\n";
             goto ERR;
         }
     } else {
         if (param->dt_a == dnnl_s8 && param->dt_b == dnnl_s8) {
-            m->i8xi8 = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(false, param->b_is_trans);
+            m->i8xi8 = std::make_unique<amx_kernel::Matmul<int8_t, int8_t>>(false, param->b_is_trans);
         } else if (param->dt_a == dnnl_u8 && param->dt_b == dnnl_s8) {
-            m->u8xi8 = std::make_shared<amx_kernel::Matmul<uint8_t, int8_t>>(false, param->b_is_trans);
+            m->u8xi8 = std::make_unique<amx_kernel::Matmul<uint8_t, int8_t>>(false, param->b_is_trans);
         } else if (param->dt_a == dnnl_bf16 && param->dt_b == dnnl_bf16) {
-            m->bf16xbf16 = std::make_shared<amx_kernel::Matmul<bfloat16, bfloat16>>(false, param->b_is_trans);
+            m->bf16xbf16 = std::make_unique<amx_kernel::Matmul<bfloat16, bfloat16>>(false, param->b_is_trans);
         } else {
             std::cout << "mm_kernel_create: unsupport input type, a: " << param->dt_a << ", b: " << param->dt_b << ".\n";
             goto ERR;

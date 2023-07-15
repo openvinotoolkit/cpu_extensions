@@ -1,18 +1,13 @@
 // Copyright (C) 2018-2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <memory>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <string.h>
-#include <vector>
-#include <chrono>
 #include <iostream>
-#include <fstream>
-#include <sstream>
-#include <cassert>
-#include <cstring>
 #include <map>
+#include <cassert>
 
 #include "llm_fc.hpp"
 #include "mm_kernel_common_amx.hpp"
@@ -23,10 +18,10 @@ namespace llmdnn {
 
 using ov::bfloat16;
 struct fc_kernel {
-    std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>> bf16xbf16;
-    std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, int8_t>> bf16xi8;
-    std::shared_ptr<amx_kernel::Matmul<int8_t, int8_t>> i8xi8;
-    std::shared_ptr<amx_kernel::Matmul<uint8_t, int8_t>> u8xi8;
+    std::unique_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>> bf16xbf16;
+    std::unique_ptr<amx_kernel::Matmul<ov::bfloat16, int8_t>> bf16xi8;
+    std::unique_ptr<amx_kernel::Matmul<int8_t, int8_t>> i8xi8;
+    std::unique_ptr<amx_kernel::Matmul<uint8_t, int8_t>> u8xi8;
 
     data_type_t dt_a;
     data_type_t dt_b;
@@ -83,13 +78,13 @@ bool fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param) {
 
     m = new fc_kernel;
     if (param->dt_a == dnnl_s8 && param->dt_b == dnnl_s8) {
-        m->i8xi8 = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(true, param->b_is_trans);
+        m->i8xi8 = std::make_unique<amx_kernel::Matmul<int8_t, int8_t>>(true, param->b_is_trans);
     } else if (param->dt_a == dnnl_u8 && param->dt_b == dnnl_s8) {
-        m->u8xi8 = std::make_shared<amx_kernel::Matmul<uint8_t, int8_t>>(true, param->b_is_trans);
+        m->u8xi8 = std::make_unique<amx_kernel::Matmul<uint8_t, int8_t>>(true, param->b_is_trans);
     } else if (param->dt_a == dnnl_bf16 && param->dt_b == dnnl_bf16) {
-        m->bf16xbf16 = std::make_shared<amx_kernel::Matmul<bfloat16, bfloat16>>(true, param->b_is_trans);
+        m->bf16xbf16 = std::make_unique<amx_kernel::Matmul<bfloat16, bfloat16>>(true, param->b_is_trans);
     } else if (param->dt_a == dnnl_bf16 && param->dt_b == dnnl_s8) {
-        m->bf16xi8 = std::make_shared<amx_kernel::Matmul<bfloat16, int8_t>>(true, param->b_is_trans);
+        m->bf16xi8 = std::make_unique<amx_kernel::Matmul<bfloat16, int8_t>>(true, param->b_is_trans);
         m->bf16xi8->quant_scale_B = param->q;
         m->bf16xi8->dequant_scale_B = param->dq;
     } else {
