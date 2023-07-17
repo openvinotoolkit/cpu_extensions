@@ -7,7 +7,6 @@
 #include <sys/types.h>
 #include <vector>
 #include <iostream>
-#include <sstream>
 
 #include "bf16.hpp"
 #include "llm_tensor.hpp"
@@ -150,20 +149,16 @@ void tensor::resize(const size_t* new_dims, size_t dim_num, void* data, size_t e
 
 void tensor::assert_dims(const std::initializer_list<size_t>& expect_dims) const {
     if (m_rank != expect_dims.size()) {
-        asm("int3");
         std::cout << "dims not same\n";
     }
     if (!std::equal(expect_dims.begin(), expect_dims.end(), m_dims)) {
-        std::stringstream ss;
-        ss << " m_dims=[";
+        std::cout << " m_dims=[";
         for (size_t i = 0; i < m_rank; i++)
-            ss << m_dims[i] << ",";
-        ss << "] expect_dims=[";
+            std::cout << m_dims[i] << ",";
+        std::cout << "] expect_dims=[";
         for (auto& i : expect_dims)
-            ss << i << ",";
-        ss << "]";
-        asm("int3");
-        std::cout << ss.str();
+            std::cout << i << ",";
+        std::cout << "]";
     }
 }
 

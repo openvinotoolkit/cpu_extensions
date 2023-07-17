@@ -10,7 +10,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <sstream>
 #include <memory.h>
 
 #include "llm_types.hpp"
@@ -177,77 +176,6 @@ struct tensor {
     }
 
     void assert_dims(const std::initializer_list<size_t>& expect_dims) const;
-
-    template<typename DT>
-    std::string repr(int max_total_lines = 16, int lines_per_row = 1) const {
-        std::stringstream ss;
-        ss << typeid(DT).name() << " shape=[";
-        const char* sep = "";
-        size_t sz = 1;
-        for (size_t i = 0; i < m_rank; i++) {
-            ss << sep << m_dims[i];
-            sz *= m_dims[i];
-            sep = ",";
-        }
-        ss << "] strides=[";
-        sep = "";
-        for (size_t i = 0; i < m_rank; i++) {
-            ss << sep << m_strides[i];
-            sep = ",";
-        }
-        ss << "] {";
-        if (m_rank > 1)
-            ss << "\n";
-        auto last_dim_size = m_dims[m_rank - 1];
-        int row_id = 0;
-        int cur_row_lines_left = lines_per_row;
-        int cur_line_elecnt = 0;
-        int cur_row_elecnt = 0;
-        size_t i;
-        auto* p = reinterpret_cast<DT*>(m_ptr);
-        for (i = 0; i < sz && max_total_lines > 0; i++) {
-            if ((i % last_dim_size) == 0) {
-                ss << row_id << ":\t\t";
-                row_id++;
-                cur_row_lines_left = lines_per_row;
-            }
-
-            // display current element if we still have buget
-            if (cur_row_lines_left > 0) {
-                ss << p[i] << ",";
-                cur_line_elecnt++;
-                cur_row_elecnt++;
-                if ((cur_line_elecnt % 16) == 15 || (cur_row_elecnt == last_dim_size)) {
-                    max_total_lines--;
-                    cur_row_lines_left--;
-                    if (cur_row_lines_left == 0) {
-                        if (cur_row_elecnt == last_dim_size)
-                            ss << ",\n";
-                        else
-                            ss << "...\n";
-                        cur_row_elecnt = 0;
-                    } else {
-                        ss << "\n\t\t";
-                    }
-                    cur_line_elecnt = 0;
-                }
-            }
-        }
-        if (i < sz) {
-            ss << "... ... ... ... \n";
-        }
-        ss << "}";
-        return ss.str();
-    }
-
-    template <typename U>
-    friend std::ostream& operator<<(std::ostream& os, const tensor& dt);    
 };
-
-template <typename U>
-std::ostream& operator<<(std::ostream& os, const tensor& dt) {
-    os << dt.repr<U>();
-    return os;
-}
 
 }  // namespace llmdnn
