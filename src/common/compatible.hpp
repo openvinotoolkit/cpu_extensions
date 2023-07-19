@@ -6,6 +6,7 @@
 
 #include <memory.h>
 #include <vector>
+#include <map>
 #include <string>
 
 // gcc 9 does not recognize 'std::__throw_bad_array_new_length()' which is imported by
@@ -37,3 +38,6 @@ bool operator!=(custom_allocator<T> const& x, custom_allocator<U> const& y) noex
 
 template<typename T>
 using llm_vector = std::vector<T, custom_allocator<T>>;
+
+template <typename Key, typename Tp, typename Compare = std::less<Key>>
+using llm_map = std::map<Key, Tp, Compare, custom_allocator<std::pair<const Key, Tp>>>;

@@ -13,6 +13,7 @@
 #include "mm_kernel_common_amx.hpp"
 #include "utility_kernel_avx512.hpp"
 #include "fc_kernel_amx.hpp"
+#include "common/compatible.hpp"
 
 namespace llmdnn {
 
@@ -32,7 +33,7 @@ struct fc_kernel {
 
 using supported_key = std::tuple<data_type_t, data_type_t, data_type_t>;
 using supported_value = std::pair<size_t, size_t>;
-static std::map<supported_key, supported_value> supported_postops = {
+static llm_map<supported_key, supported_value> supported_postops = {
     { { dnnl_s8, dnnl_s8, dnnl_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
     { { dnnl_s8, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
     { { dnnl_s8, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
