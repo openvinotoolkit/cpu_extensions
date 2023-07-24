@@ -167,7 +167,7 @@ class BloomAttentionExt:
         self.mha = ld.mha_gpt()
 
     def forward(self, query, key, value, alibi, attention_mask, normal_factor):
-        return self.mha.exec(query, key, value, alibi, attention_mask, normal_factor, False)
+        return self.mha.exec(query, key, value, alibi, attention_mask, torch.tensor([]), False, normal_factor, False)
 
 HEAD_NUM = 32
 SIZE_PER_HEAD = 80

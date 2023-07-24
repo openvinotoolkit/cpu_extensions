@@ -108,8 +108,8 @@ class GPTNeoXAttentionExt:
     def __init__(self):
         self.mha = ld.mha_gpt()
 
-    def forward(self, query, key, value, attention_mask, normal_factor):
-        return self.mha.exec(query, key, value, torch.tensor([]), attention_mask, normal_factor, True)
+    def forward(self, query, key, value, attention_mask, normal_factor, causal_mask = torch.tensor([]), select_nfltmax_at_0 = False):
+        return self.mha.exec(query, key, value, torch.tensor([]), attention_mask, causal_mask, select_nfltmax_at_0, normal_factor, False if causal_mask.numel() > 0 else True)
 
 HEAD_NUM = 32
 SIZE_PER_HEAD = 80
@@ -165,5 +165,58 @@ def test_gpt_neox():
     print('done.')
     return
 
+def test_gpt_neox_with_causal():
+    inputs = [
+        # q, k, v, attn_mask
+        # q: [batch, num_heads, query_seq_len, head_size]
+        # k: [batch, num_heads, key_seq_len, head_size]
+        # v: [batch, num_heads, value_seq_len, head_size]
+        # attn: [2, 1, 1, key_seq_len]
+        # causal: [2, 1, query_seq_len, key_seq_len]
+        # (np.random.random(size=[2, HEAD_NUM, 2, SIZE_PER_HEAD]).astype(np.float32),
+        #  np.random.random(size=[2, HEAD_NUM, 32, SIZE_PER_HEAD]).astype(np.float32),
+        #  np.random.random(size=[2, HEAD_NUM, 32, SIZE_PER_HEAD]).astype(np.float32),
+        #  np.zeros([2, 1, 1, 32], dtype=np.float32)),
+        (np.random.random(size=[2, HEAD_NUM, 200, SIZE_PER_HEAD]).astype(np.float32),
+         np.random.random(size=[2, HEAD_NUM, 200, SIZE_PER_HEAD]).astype(np.float32),
+         np.random.random(size=[2, HEAD_NUM, 200, SIZE_PER_HEAD]).astype(np.float32),
+         np.zeros([2, 1, 1, 200], dtype=np.float32)),
+        (np.random.random(size=[2, HEAD_NUM, 1, SIZE_PER_HEAD]).astype(np.float32),
+         np.random.random(size=[2, HEAD_NUM, 200, SIZE_PER_HEAD]).astype(np.float32),
+         np.random.random(size=[2, HEAD_NUM, 200, SIZE_PER_HEAD]).astype(np.float32),
+         np.zeros([2, 1, 1, 200], dtype=np.float32)),
+    ]
+    ref_net = get_ref_model()
+    net = GPTNeoXAttentionExt()
+    causal_mask = torch.tril(torch.ones((MAX_POSITION_EMBEDDINGS, MAX_POSITION_EMBEDDINGS), dtype=torch.uint8)).view(
+                1, 1, MAX_POSITION_EMBEDDINGS, MAX_POSITION_EMBEDDINGS
+            )
+    with torch.cpu.amp.autocast():
+        for (i, input) in enumerate(inputs):
+            q, k, v, attn_mask = input
+            q = torch.from_numpy(q).to(torch.bfloat16)
+            k = torch.from_numpy(k).to(torch.bfloat16)
+            v = torch.from_numpy(v).to(torch.bfloat16)
+            
+            batch_size, num_attention_heads, query_length, attn_head_size = q.size()
+            key_length = k.size(-2)
+            causal_mask_sub = causal_mask[:, :, key_length - query_length : key_length, :key_length].contiguous()
+            # 0 means -fltmax
+            select_nfltmax_at_0 = True
+            if i == 0:
+                # 1 means -fltmax
+                causal_mask_sub = 1 - causal_mask_sub
+                select_nfltmax_at_0 = False
+            attn_mask = torch.from_numpy(attn_mask)
+            attn_mask[:,:,:,-2:] = torch.finfo(torch.float32).min
+            ref_output = ref_net.forward(q, k, v, attn_mask)
+            output = net.forward(q, k, v, attn_mask, normal_factor = 1.0 / math.sqrt(SIZE_PER_HEAD), causal_mask = causal_mask_sub, select_nfltmax_at_0 = select_nfltmax_at_0)
+            if not torch.allclose(ref_output, output, rtol=0.001, atol=0.01):
+                print(f"error at index {i} ref:\n{ref_output} \ncur:\n {output} ")
+                assert(False)
+
+    print('done.')
+    return
+
 if __name__ == "__main__":
-    test_gpt_neox()
+    test_gpt_neox_with_causal()

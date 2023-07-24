@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <emmintrin.h>
 #include <stdint.h>
 #include "common/bf16.hpp"
 #ifdef _WIN32
@@ -91,63 +92,114 @@ inline void cvt_i32_f32_avx512(float* dst, int32_t* src, size_t ele_num) {
     }
 }
 
-inline void mul_f32_avx512(float* dst, float* src, float mul, int ele_num) {
+enum mul_add2_select_flag {
+    mul_add2_select_flag_none,
+    mul_add2_select_flag_add1 = 1,
+    mul_add2_select_flag_add2 = 2,
+    mul_add2_select_flag_select = 4
+};
+template<mul_add2_select_flag flag, bool select_nfltmax_at_0 = false>
+inline void _mul_add2_select_f32_avx512(float* dst, float* src, float mul, float* add1, float* add2, uint8_t* select, int ele_num) {
     auto mul_f = _mm512_set1_ps(mul);
     int i;
     auto tail = ele_num % 16;
     __mmask16 msk = _cvtu32_mask16(0xFFFFu >> (16 - tail));
+    auto zero_i32 = _mm512_setzero_si512();
+    auto nfltmax = _mm512_set1_ps(-__FLT_MAX__);
     for (i = 0; i < ele_num - tail; i += 16) {
-        auto a_f = _mm512_loadu_ps(src);
-        _mm512_storeu_ps(dst, _mm512_mul_ps(a_f, mul_f));
-        src += 16;
-        dst += 16;
+        auto a_f = _mm512_loadu_ps(src + i);
+        __m512 result;
+        if constexpr ((flag & (mul_add2_select_flag_add1 | mul_add2_select_flag_add2)) == mul_add2_select_flag_none)
+            result = _mm512_mul_ps(a_f, mul_f);
+        else if constexpr ((flag & (mul_add2_select_flag_add1 | mul_add2_select_flag_add2)) == mul_add2_select_flag_add2)
+            result = _mm512_fmadd_ps(a_f, mul_f, _mm512_loadu_ps(add2 + i));
+        else {
+            result = _mm512_fmadd_ps(a_f, mul_f, _mm512_loadu_ps(add1 + i));
+            if constexpr (flag & mul_add2_select_flag_add2)
+                result = _mm512_add_ps(result, _mm512_loadu_ps(add2 + i));
+        }
+        if constexpr (flag & mul_add2_select_flag_select) {
+            auto r_maski8 = _mm_loadu_si128(reinterpret_cast<__m128i*>(select + i));
+            auto r_maski32 = _mm512_cvtepi8_epi32(r_maski8);
+            r_maski32 = _mm512_sub_epi32(zero_i32, r_maski32);
+            auto r_maskps = _mm512_movepi32_mask(r_maski32); // -FLT_MAX if mask == 0
+            if constexpr (select_nfltmax_at_0)
+                result = _mm512_mask_blend_ps(r_maskps, nfltmax, result);
+            else
+                result = _mm512_mask_blend_ps(r_maskps, result, nfltmax);
+        }
+
+        _mm512_storeu_ps(dst + i, result);
     }
     if (tail) {
-        auto a_f = _mm512_maskz_loadu_ps(msk, src);
-        _mm512_mask_storeu_ps(dst, msk, _mm512_mul_ps(a_f, mul_f));
+        auto a_f = _mm512_maskz_loadu_ps(msk, src + i);
+        __m512 result;
+        if constexpr ((flag & (mul_add2_select_flag_add1 | mul_add2_select_flag_add2)) == mul_add2_select_flag_none)
+            result = _mm512_mul_ps(a_f, mul_f);
+        else if constexpr ((flag & (mul_add2_select_flag_add1 | mul_add2_select_flag_add2)) == mul_add2_select_flag_add2)
+            result = _mm512_fmadd_ps(a_f, mul_f, _mm512_maskz_loadu_ps(msk, add2 + i));
+        else {
+            result = _mm512_fmadd_ps(a_f, mul_f, _mm512_maskz_loadu_ps(msk, add1 + i));
+            if constexpr (flag & mul_add2_select_flag_add2)
+                result = _mm512_add_ps(result, _mm512_maskz_loadu_ps(msk, add2 + i));
+        }
+        if constexpr (flag & mul_add2_select_flag_select) {
+            auto r_maski8 = _mm512_castsi512_si128(_mm512_maskz_loadu_epi8(msk, select + i));
+            auto r_maski32 = _mm512_cvtepi8_epi32(r_maski8);
+            r_maski32 = _mm512_sub_epi32(zero_i32, r_maski32);
+            auto r_maskps = _mm512_movepi32_mask(r_maski32); // -FLT_MAX if mask == 0
+            if constexpr (select_nfltmax_at_0)
+                result = _mm512_mask_blend_ps(r_maskps, nfltmax, result);
+            else
+                result = _mm512_mask_blend_ps(r_maskps, result, nfltmax);
+        }
+
+        _mm512_mask_storeu_ps(dst + i, msk, result);
     }
 }
 
-inline void mul_add_f32_avx512(float* dst, float* src, float mul, float* add, int ele_num) {
-    auto mul_f = _mm512_set1_ps(mul);
-    int i;
-    auto tail = ele_num % 16;
-    __mmask16 msk = _cvtu32_mask16(0xFFFFu >> (16 - tail));
-    for (i = 0; i < ele_num - tail; i += 16) {
-        auto a_f = _mm512_loadu_ps(src);
-        auto add_f = _mm512_loadu_ps(add);
-        _mm512_storeu_ps(dst, _mm512_fmadd_ps(a_f, mul_f, add_f));
-        src += 16;
-        dst += 16;
-        add += 16;
-    }
-    if (tail) {
-        auto a_f = _mm512_maskz_loadu_ps(msk, src);
-        auto add_f = _mm512_maskz_loadu_ps(msk, add);
-        _mm512_mask_storeu_ps(dst, msk, _mm512_fmadd_ps(a_f, mul_f, add_f));
+inline void mul_add2_select_f32_avx512(float* dst, float* src, float mul, float* add1, float* add2, uint8_t* select, bool select_nfltmax_at_0, int ele_num) {
+    if (add1) {
+        if (add2) {
+            if (select) {
+                if (select_nfltmax_at_0)
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add1 | mul_add2_select_flag_add2 | mul_add2_select_flag_select), true>(dst, src, mul, add1, add2, select, ele_num);
+                else
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add1 | mul_add2_select_flag_add2 | mul_add2_select_flag_select)>(dst, src, mul, add1, add2, select, ele_num);;
+            } else {
+                _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add1 | mul_add2_select_flag_add2)>(dst, src, mul, add1, add2, select, ele_num);
+            }
+        } else {
+            if (select) {
+                if (select_nfltmax_at_0)
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add1 | mul_add2_select_flag_select), true>(dst, src, mul, add1, add2, select, ele_num);
+                else
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add1 | mul_add2_select_flag_select)>(dst, src, mul, add1, add2, select, ele_num);
+            } else {
+                _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add1)>(dst, src, mul, add1, add2, select, ele_num);
+            }
+        }
+    } else {
+        if (add2) {
+            if (select) {
+                if (select_nfltmax_at_0)
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add2 | mul_add2_select_flag_select), true>(dst, src, mul, add1, add2, select, ele_num);
+                else
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add2 | mul_add2_select_flag_select)>(dst, src, mul, add1, add2, select, ele_num);;
+            } else {
+                _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_add2)>(dst, src, mul, add1, add2, select, ele_num);
+            }
+        } else {
+            if (select) {
+                if (select_nfltmax_at_0)
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_select), true>(dst, src, mul, add1, add2, select, ele_num);
+                else
+                    _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_select)>(dst, src, mul, add1, add2, select, ele_num);
+            } else {
+                _mul_add2_select_f32_avx512<static_cast<mul_add2_select_flag>(mul_add2_select_flag_none)>(dst, src, mul, add1, add2, select, ele_num);
+            }
+        }
     }
 }
 
-inline void mul_add2_f32_avx512(float* dst, float* src, float mul, float* add1, float* add2, int ele_num) {
-    auto mul_f = _mm512_set1_ps(mul);
-    int i;
-    auto tail = ele_num % 16;
-    __mmask16 msk = _cvtu32_mask16(0xFFFFu >> (16 - tail));
-    for (i = 0; i < ele_num - tail; i += 16) {
-        auto a_f = _mm512_loadu_ps(src);
-        auto add1_f = _mm512_loadu_ps(add1);
-        auto add2_f = _mm512_loadu_ps(add2);
-        _mm512_storeu_ps(dst, _mm512_add_ps(_mm512_fmadd_ps(a_f, mul_f, add1_f), add2_f));
-        src += 16;
-        dst += 16;
-        add1 += 16;
-        add2 += 16;
-    }
-    if (tail) {
-        auto a_f = _mm512_maskz_loadu_ps(msk, src);
-        auto add1_f = _mm512_maskz_loadu_ps(msk, add1);
-        auto add2_f = _mm512_maskz_loadu_ps(msk, add2);
-        _mm512_mask_storeu_ps(dst, msk, _mm512_add_ps(_mm512_fmadd_ps(a_f, mul_f, add1_f), add2_f));
-    }
-}
 }

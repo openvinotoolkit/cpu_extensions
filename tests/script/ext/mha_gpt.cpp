@@ -18,13 +18,14 @@ void regclass_mha_gpt(pybind11::module m) {
     py::class_<llmdnn::mha_gpt, std::shared_ptr<llmdnn::mha_gpt>> cls(m, "mha_gpt");
     cls.def(py::init<>());
     cls.def("exec", [] (llmdnn::mha_gpt& self, const torch::Tensor& q, const torch::Tensor& k, const torch::Tensor& v, const torch::Tensor& alibi,
-                        const torch::Tensor& attn_mask, float normal_factor, bool use_causal) {
+                        const torch::Tensor& attn_mask, const torch::Tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal) {
             // q: [batch, num_heads, query_seq_len, head_size]
             // k: [batch, num_heads, key_seq_len, head_size]
             // v: [batch, num_heads, key_seq_len, head_size]
             // attn_mask: [batch, 1, 1/query_seq_len, key_seq_len]
             // out: [batch, query_seq_len, num_heads * head_size]
             // alibi: [batch, num_heads, 1, key_seq_len]
+            // causal_mask: [batch, 1, query_seq_len, key_seq_len]
             AT_ASSERT(q.dim() == 4 && k.dim() == 4 && v.dim() == 4 && attn_mask.dim() == 4);
             auto batch = q.size(0);
             auto num_heads = q.size(1);
@@ -34,7 +35,7 @@ void regclass_mha_gpt(pybind11::module m) {
                     num_heads == k.size(1) && num_heads == v.size(1) &&
                     head_size == v.size(3));
 
-            llmdnn::tensor q_, k_, v_, out_, attn_mask_, alibi_;
+            llmdnn::tensor q_, k_, v_, out_, attn_mask_, alibi_, causal_mask_;
             q_.resize({q.size(0), q.size(1), q.size(2), q.size(3)}, reinterpret_cast<ov::bfloat16*>(q.data_ptr()));
             k_.resize({k.size(0), k.size(1), k.size(2), k.size(3)}, reinterpret_cast<ov::bfloat16*>(k.data_ptr()));
             if (k.size(2) != v.size(2)) {
@@ -49,7 +50,9 @@ void regclass_mha_gpt(pybind11::module m) {
                 attn_mask_.resize({attn_mask.size(0), attn_mask.size(1), attn_mask.size(2), attn_mask.size(3)}, attn_mask.data_ptr<float>());
             if (alibi.numel())
                 alibi_.resize({alibi.size(0), alibi.size(1), alibi.size(2), alibi.size(3)}, alibi.data_ptr<float>());
-            self.exec(q_, k_, v_, out_, attn_mask_, alibi_, normal_factor, use_causal);
+            if (causal_mask.numel())
+                causal_mask_.resize({causal_mask.size(0), causal_mask.size(1), causal_mask.size(2), causal_mask.size(3)}, causal_mask.data_ptr<uint8_t>());
+            self.exec(q_, k_, v_, out_, attn_mask_, alibi_, causal_mask_, select_nfltmax_at_0, normal_factor, use_causal);
 
             return out;
         },
@@ -58,6 +61,8 @@ void regclass_mha_gpt(pybind11::module m) {
         py::arg("v"),
         py::arg("alibi"),
         py::arg("attn_mask"),
+        py::arg("causal_mask"),
+        py::arg("select_nfltmax_at_0"),
         py::arg("normal_factor"),
         py::arg("use_causal"),
         R"(

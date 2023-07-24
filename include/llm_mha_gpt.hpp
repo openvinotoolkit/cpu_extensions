@@ -25,6 +25,10 @@ public:
                                             //      [batch, 1, 1, key_seq_len],
                                             //      [batch, 1, query_seq_len, key_seq_len]
               const tensor& alibi,          // alibi[opt] shape: [batch, num_heads, 1, key_seq_len]
+              const tensor& causal_mask,    // [opt] use_causal_mask must be false, u8, shape:
+                                            //      [1, 1, query_seq_len, key_seq_len]
+                                            //      [batch, 1, query_seq_len, key_seq_len]
+              bool select_nfltmax_at_0,     // used when causal_mask is not null. true: causal_mask=0 use -FLT_MAX 
               float normal_factor,
               bool use_causal_mask = false);// add causal mask
 
@@ -36,6 +40,8 @@ public:
                           const tensor& output,
                           const tensor& attn_mask,
                           const tensor& alibi,
+                          const tensor& causal_mask,
+                          bool select_nfltmax_at_0,
                           float normal_factor,
                           bool use_causal_mask = false) = 0;
     };

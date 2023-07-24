@@ -25,9 +25,11 @@ struct mha_gpt_impl_amx : public mha_gpt::impl {
     mha_gpt_impl_amx() = default;
     ~mha_gpt_impl_amx();
     void create(data_type_t in_type, size_t seq_len, size_t head_size, bool is_bloom);
-    void exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, float normal_factor, bool use_causal_mask) override;
+    void exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask,
+              const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask) override;
 
-    void mha_bf16(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, float normal_factor, bool use_causal_mask);
+    void mha_bf16(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask,
+                  const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask);
 
     size_t _head_size_aligned = 0;
     size_t _buffer_mat0_out_size = 0;
@@ -100,7 +102,7 @@ void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_s
 }
 
 void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask,
-    const tensor& alibi, float normal_factor, bool use_causal_mask) {
+    const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask) {
     auto batch = q.m_dims[0];
     auto head_num = q.m_dims[1];
     auto query_seq_len = q.m_dims[2];
@@ -113,7 +115,7 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
     auto& gemAvB_ops = gemAvB_BF16xBF16;
     auto& qKtrGemm_ops = qKtrGemm_BF16xBF16;
     auto& qKVGemm_ops = qKVGemm_BF16xBF16;
-    bool use_vector = query_seq_len == 1 && head_size >= 32 && head_size <= 32 * 6 && !is_bloom && !alibi && attn_mask;
+    bool use_vector = query_seq_len == 1 && head_size >= 32 && head_size <= 32 * 6 && !is_bloom && !alibi && attn_mask && !causal_mask;
     size_t head_stride_in_attn = head_size;
     size_t batch_stride_in_attn = head_size * head_num * query_seq_len;
     size_t causal_mask_offset_start = use_causal_mask ? key_seq_len - query_seq_len : key_seq_len;
@@ -135,7 +137,7 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
             (*gemAvB_ops[thread_id])(matK, reinterpret_cast<ov::bfloat16*>(q_sub), reinterpret_cast<float*>(mat0_out));
 
             float* pMatMul0Out = reinterpret_cast<float*>(mat0_out);
-            mul_add_f32_avx512(pMatMul0Out, pMatMul0Out, normal_factor, &attn_mask.at<float>({i0}), key_seq_len);
+            mul_add2_select_f32_avx512(pMatMul0Out, pMatMul0Out, normal_factor, nullptr, &attn_mask.at<float>({i0}), nullptr, false, key_seq_len);
             softmax_avx512<ov::bfloat16>(reinterpret_cast<ov::bfloat16*>(pMatMul0Out), pMatMul0Out, key_seq_len, nullptr);
             auto out_sub = out + (i0 * batch_stride_in_attn + i1 * head_stride_in_attn) * sizeof(ov::bfloat16);
             tensor2D<ov::bfloat16> matQK(query_seq_len, key_seq_len, reinterpret_cast<ov::bfloat16*>(mat0_out), rndup(key_seq_len * sizeof(ov::bfloat16), 64));
@@ -188,44 +190,21 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 tensor2D<ov::bfloat16> softmax_dst(seq_cout, key_seq_len, reinterpret_cast<ov::bfloat16*>(mat0_out), rndup(key_seq_len * sizeof(ov::bfloat16), 64));
                 // no attention mask
                 size_t valid_softmax_items = std::min(causal_mask_offset_start + seq_start + 1, key_seq_len);
-                if (!attn_mask) {
-                    for (int m = 0; m < seq_cout; m++) {
-                        float* src = &matQK(m, 0);
-                        ov::bfloat16* dst = &softmax_dst(m, 0);
-                        if (!alibi)
-                            mul_f32_avx512(src, src, normal_factor, valid_softmax_items);
-                        else
-                            // alibi shape: [batch, head_num, 1, key_seq_len]
-                            mul_add_f32_avx512(src, src, normal_factor,
-                                &alibi.at<float>({i0, i1}),
-                                valid_softmax_items);
-                        softmax_avx512<ov::bfloat16>(dst, src, valid_softmax_items, nullptr);
-                        if (key_seq_len > valid_softmax_items) {
-                            auto *invalidPtr = dst + valid_softmax_items;
-                            memset(static_cast<void*>(invalidPtr), 0, (key_seq_len - valid_softmax_items) * sizeof(ov::bfloat16));
-                            valid_softmax_items = std::min(valid_softmax_items + 1, key_seq_len);
-                        }
-                    }
-                } else {
-                    // [batch, 1, 1, key_seq_len] or [batch, 1, query_seq_len, key_seq_len]
-                    for (int m = 0; m < seq_cout; m++) {
-                        auto attn_sub = &attn_mask.at<float>({i0, 0, attn_mask.m_dims[2] == 1 ? 0 : m + seq_start});
-                        float* src = &matQK(m, 0);
-                        ov::bfloat16* dst = &softmax_dst(m, 0);
-                        if (!alibi)
-                            mul_add_f32_avx512(src, src, normal_factor, attn_sub, valid_softmax_items);
-                        else
-                            // alibi shape: [batch, head_num, 1, key_seq_len]
-                            mul_add2_f32_avx512(src, src, normal_factor,
-                                &alibi.at<float>({i0, i1}),
-                                attn_sub,
-                                valid_softmax_items);
-                        softmax_avx512<ov::bfloat16>(dst, src, valid_softmax_items, nullptr);
-                        if (key_seq_len > valid_softmax_items) {
-                            auto *invalidPtr = dst + valid_softmax_items;
-                            memset(static_cast<void*>(invalidPtr), 0, (key_seq_len - valid_softmax_items) * sizeof(ov::bfloat16));
-                            valid_softmax_items = std::min(valid_softmax_items + 1, key_seq_len);
-                        }
+                // attn: [batch, 1, 1, key_seq_len] or [batch, 1, query_seq_len, key_seq_len]
+                // alibi: [batch, num_heads, 1, key_seq_len]
+                // causal: [batch/1, 1, query_seq_len, key_seq_len]
+                for (int m = 0; m < seq_cout; m++) {
+                    auto attn_sub = attn_mask ? &attn_mask.at<float>({i0, 0, attn_mask.m_dims[2] == 1 ? 0 : m + seq_start}) : nullptr;
+                    auto alibi_sub = alibi ? &alibi.at<float>({i0, i1}) : nullptr;
+                    auto causal_mask_sub = causal_mask ? &causal_mask.at<uint8_t>({causal_mask.m_dims[0] == 1 ? 0 : i0, 0, m + seq_start}) : nullptr;
+                    float* src = &matQK(m, 0);
+                    ov::bfloat16* dst = &softmax_dst(m, 0);
+                    mul_add2_select_f32_avx512(src, src, normal_factor, alibi_sub, attn_sub, causal_mask_sub, select_nfltmax_at_0, valid_softmax_items);
+                    softmax_avx512<ov::bfloat16>(dst, src, valid_softmax_items, nullptr);
+                    if (key_seq_len > valid_softmax_items) {
+                        auto *invalidPtr = dst + valid_softmax_items;
+                        memset(static_cast<void*>(invalidPtr), 0, (key_seq_len - valid_softmax_items) * sizeof(ov::bfloat16));
+                        valid_softmax_items = std::min(valid_softmax_items + 1, key_seq_len);
                     }
                 }
 
@@ -245,7 +224,7 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
     }
 }
 
-void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, float normal_factor, bool use_causal_mask) {
+void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask) {
     if (q.m_rank != 4 || k.m_rank != 4 || v.m_rank != 4) {
         std::cout << "q,k,v rank does not equal 4.\n";
         return;
@@ -277,6 +256,16 @@ void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, c
             return;
         }
     }
+    if (causal_mask) {
+        if (causal_mask.m_rank != 4) {
+            std::cout << "causal_mask rank should be 4.\n";
+            return;
+        }
+        if (use_causal_mask) {
+            std::cout << "use_causal_mask must be false to disable builtin causal mask.\n";
+            return;
+        }
+    }
     auto batch = q.m_dims[0];
     auto head_num = q.m_dims[1];
     auto query_seq_len = q.m_dims[2];
@@ -298,7 +287,7 @@ void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, c
 
     if (in_dtype == dnnl_bf16 && out_dtype == dnnl_bf16) {
         create(in_dtype, key_seq_len, head_size, is_bloom);
-        mha_bf16(q, k, v, output, attn_mask, alibi, normal_factor, use_causal_mask);
+        mha_bf16(q, k, v, output, attn_mask, alibi, causal_mask, select_nfltmax_at_0, normal_factor, use_causal_mask);
     } else {
         std::cout << "doesn't support provided input precisions.\n";
     }
