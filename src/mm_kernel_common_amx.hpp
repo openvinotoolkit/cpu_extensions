@@ -459,6 +459,9 @@ namespace functional {
                 re = _mm512_setzero_epi32();
                 rf = _mm512_setzero_epi32();
                 break;
+            default:
+                assert(false);
+                return;
         }
 
         transpose_m512i_16x16(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, ra, rb, rc, rd, re, rf);
@@ -802,6 +805,9 @@ namespace functional {
                 re = _mm512_setzero_epi32();
                 rf = _mm512_setzero_epi32();
                 break;
+            default:
+                assert(false);
+                return;
         }
         transpose_m512i_16x16(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, ra, rb, rc, rd, re, rf);
         _mm512_storeu_epi32(dst, r0);

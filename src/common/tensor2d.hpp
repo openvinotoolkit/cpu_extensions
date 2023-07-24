@@ -23,7 +23,7 @@ struct tensor2D {
     int64_t capacity = 0;
     int stride = 0;
     bool force_compact = false;
-    bool own;
+    bool own = false;
     int padded_dim1 = 0;
 
     tensor2D() = default;
