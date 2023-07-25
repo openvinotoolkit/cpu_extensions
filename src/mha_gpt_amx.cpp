@@ -17,7 +17,7 @@
 #include "llm_mha_gpt.hpp"
 #include "mha_gpt_amx.hpp"
 
-using namespace ov::cpu;
+using namespace utility;
 
 namespace llmdnn {
 
@@ -69,7 +69,7 @@ void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_s
     // matmul1: [batch, head_num, query_seq_len, head_size]
     // attn_output: [batch, query_seq_len, head_num * head_size]
     if (_num_threads == 0) {
-        _num_threads = getTotalThreads();
+        _num_threads = get_total_threads();
         _head_size_aligned = rndup(head_size, 32);
         gemAvB_BF16xBF16.resize(_num_threads);
         for (size_t i = 0; i < _num_threads; i++) {

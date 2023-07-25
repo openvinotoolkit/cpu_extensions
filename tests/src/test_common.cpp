@@ -62,19 +62,17 @@ bool initXTILE() {
     return true;
 }
 
-namespace ov {
-namespace cpu {
+namespace utility {
 
-size_t getTotalThreads() {
+size_t get_total_threads() {
     return omp_get_max_threads();
 }
 
-void TrySimpleParallelFor(const std::ptrdiff_t total, const std::function<void(std::ptrdiff_t)>& fn) {
+void simple_parallel_for(const size_t total, const std::function<void(size_t)>& fn) {
     #pragma omp parallel for
-    for(std::ptrdiff_t i = 0; i < total; i++) {
+    for(size_t i = 0; i < total; i++) {
         fn(i);
     }
 }
 
-}
 }

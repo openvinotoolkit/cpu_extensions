@@ -8,11 +8,10 @@
 #include <string>
 #include <functional>
 
-namespace ov {
-namespace cpu {
+namespace utility {
 
-size_t getTotalThreads();
-void TrySimpleParallelFor(const std::ptrdiff_t total, const std::function<void(std::ptrdiff_t)>& fn);
+size_t get_total_threads();
+void simple_parallel_for(const std::ptrdiff_t total, const std::function<void(std::ptrdiff_t)>& fn);
 
 // copy from openvino/core/parallel.hpp
 template <typename T>
@@ -101,13 +100,13 @@ void for_1d(const int& ithr, const int& nthr, const T0& D0, const F& func) {
 template <typename T0, typename F>
 void parallel_for(const T0& D0, const F& func) {
     auto work_amount = static_cast<size_t>(D0);
-    int nthr = static_cast<int>(getTotalThreads());
+    int nthr = static_cast<int>(get_total_threads());
     if (static_cast<size_t>(nthr) > work_amount)
         nthr = static_cast<int>(work_amount);
     if (nthr == 1) {
         for_1d(0, 1, D0, func);
     } else {
-        TrySimpleParallelFor(static_cast<size_t>(nthr), [&](size_t ithr) {
+        simple_parallel_for(static_cast<size_t>(nthr), [&](size_t ithr) {
             for_1d(static_cast<int>(ithr), nthr, D0, func);
         });
     }
@@ -133,13 +132,13 @@ void for_2d(const int& ithr, const int& nthr, const T0& D0, const T1& D1, const 
 template <typename T0, typename T1, typename F>
 void parallel_for2d(const T0& D0, const T1& D1, const F& func) {
     auto work_amount = static_cast<size_t>(D0 * D1);
-    int nthr = static_cast<int>(getTotalThreads());
+    int nthr = static_cast<int>(get_total_threads());
     if (static_cast<size_t>(nthr) > work_amount)
         nthr = static_cast<int>(work_amount);
     if (nthr == 1) {
         for_2d(0, 1, D0, D1, func);
     } else {
-        TrySimpleParallelFor(static_cast<size_t>(nthr), [&](size_t ithr) {
+        simple_parallel_for(static_cast<size_t>(nthr), [&](size_t ithr) {
             for_2d(static_cast<int>(ithr), nthr, D0, D1, func);
         });
     }
@@ -166,17 +165,16 @@ void for_3d(const int& ithr, const int& nthr, const T0& D0, const T1& D1, const 
 template <typename T0, typename T1, typename T2, typename F>
 void parallel_for3d(const T0& D0, const T1& D1, const T2& D2, const F& func) {
     auto work_amount = static_cast<size_t>(D0 * D1 * D2);
-    int nthr = static_cast<int>(getTotalThreads());
+    int nthr = static_cast<int>(get_total_threads());
     if (static_cast<size_t>(nthr) > work_amount)
         nthr = static_cast<int>(work_amount);
     if (nthr == 1) {
         for_3d(0, 1, D0, D1, D2, func);
     } else {
-        TrySimpleParallelFor(static_cast<size_t>(nthr), [&](size_t ithr) {
+        simple_parallel_for(static_cast<size_t>(nthr), [&](size_t ithr) {
             for_3d(static_cast<int>(ithr), nthr, D0, D1, D2, func);
         });
     }
 }
 
-};  // namespace cpu
-};  // namespace ov
+}  // namespace utility

@@ -16,7 +16,7 @@
 #include "emb_gpt_avx512.hpp"
 #include "rotary_kernel_avx512.hpp"
 
-using namespace ov::cpu;
+using namespace utility;
 
 namespace llmdnn {
 
