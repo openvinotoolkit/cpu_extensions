@@ -33,17 +33,17 @@ struct fc_kernel {
 
 using supported_key = std::tuple<data_type_t, data_type_t, data_type_t>;
 using supported_value = std::pair<size_t, size_t>;
-static llm_map<supported_key, supported_value> supported_postops = {
-    { { dnnl_s8, dnnl_s8, dnnl_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
-    { { dnnl_s8, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-    { { dnnl_s8, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-    { { dnnl_bf16, dnnl_bf16, dnnl_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
-    { { dnnl_bf16, dnnl_bf16, dnnl_f32 }, { 0, BIAS | GELU | GELU_TANH } },
-    { { dnnl_bf16, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-    { { dnnl_bf16, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-};
-
 static bool check_valid_postops(size_t value, data_type_t dt_a, data_type_t dt_b, data_type_t dt_c) {
+    llm_map<supported_key, supported_value> supported_postops = {
+        { { dnnl_s8, dnnl_s8, dnnl_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
+        { { dnnl_s8, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { dnnl_s8, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { dnnl_bf16, dnnl_bf16, dnnl_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
+        { { dnnl_bf16, dnnl_bf16, dnnl_f32 }, { 0, BIAS | GELU | GELU_TANH } },
+        { { dnnl_bf16, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { dnnl_bf16, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+    };
+
     auto it = supported_postops.find(std::make_tuple(dt_a, dt_b, dt_c));
     if (it == supported_postops.end()) {
         return false;
