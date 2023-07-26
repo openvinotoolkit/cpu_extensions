@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <vector>
 #include <string>
 #include <functional>
@@ -11,7 +12,7 @@
 namespace utility {
 
 size_t get_total_threads();
-void simple_parallel_for(const std::ptrdiff_t total, const std::function<void(std::ptrdiff_t)>& fn);
+void simple_parallel_for(const size_t total, const std::function<void(size_t)>& fn);
 
 // copy from openvino/core/parallel.hpp
 template <typename T>
