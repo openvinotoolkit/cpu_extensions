@@ -45,13 +45,13 @@ tensor tensor::index(const std::initializer_list<tensor_index>& indices) const {
     }
     sub_tensor.m_rank = i_dst;  // index may imply squeeze
     sub_tensor.m_ptr = reinterpret_cast<uint8_t*>(m_ptr) + off;
-    return std::move(sub_tensor);
+    return sub_tensor;
 }
 
 // slice: return a sub-view (w/o ownership/refcount to original data)
 tensor tensor::slice(int axis, int start, int end) const {
     tensor sub_tensor;
-    assert(axis < m_rank);
+    assert(static_cast<size_t>(axis) < m_rank);
 
     sub_tensor.m_capacity = 0;
     sub_tensor.m_rank = m_rank;  // slice dosen't change rank & strides
@@ -65,7 +65,7 @@ tensor tensor::slice(int axis, int start, int end) const {
     auto* data = reinterpret_cast<uint8_t*>(m_ptr) + off;
     sub_tensor.m_ptr = reinterpret_cast<void*>(data);
 
-    return std::move(sub_tensor);
+    return sub_tensor;
 }
 
 bool tensor::is_dense() const {

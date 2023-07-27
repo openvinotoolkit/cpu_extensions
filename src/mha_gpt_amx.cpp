@@ -170,7 +170,7 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
             parallel_it_init(start, i0, batch, i1, head_num, seq, seq_cout_all);
             ov::bfloat16* prev_k = nullptr;
             ov::bfloat16* prev_v = nullptr;
-            for (int iwork = start; iwork < end; ++iwork) {
+            for (size_t iwork = start; iwork < end; ++iwork) {
                 auto seq_start = seq * 32;
                 auto seq_end = std::min(seq_start + 32, query_seq_len);
                 auto seq_cout = seq_end - seq_start;
@@ -201,7 +201,7 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 // attn: [batch, 1, 1, key_seq_len] or [batch, 1, query_seq_len, key_seq_len]
                 // alibi: [batch, num_heads, 1, key_seq_len]
                 // causal: [batch/1, 1, query_seq_len, key_seq_len]
-                for (int m = 0; m < seq_cout; m++) {
+                for (uint32_t m = 0; m < seq_cout; m++) {
                     auto attn_sub = attn_mask ? &attn_mask.at<float>({i0, 0, attn_mask.m_dims[2] == 1 ? 0 : m + seq_start}) : nullptr;
                     auto alibi_sub = alibi ? &alibi.at<float>({i0, i1}) : nullptr;
                     auto causal_mask_sub = causal_mask ? &causal_mask.at<uint8_t>({causal_mask.m_dims[0] == 1 ? 0 : i0, 0, m + seq_start}) : nullptr;
@@ -276,7 +276,6 @@ void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, c
     }
     auto batch = q.m_dims[0];
     auto head_num = q.m_dims[1];
-    auto query_seq_len = q.m_dims[2];
     auto head_size = q.m_dims[3];
     auto key_seq_len = k.m_dims[2];
 

@@ -24,7 +24,6 @@ static void memcpy_past_kv(const tensor& k_past, const tensor& v_past, const ten
     auto batch = k_past.m_dims[0];
     auto head_num = k_past.m_dims[1];
     auto past_seq_len = k_past.m_dims[2];
-    auto size = k_past.m_dims[3];
     parallel_for3d(batch, head_num, past_seq_len, [&](size_t b, size_t h, size_t s) {
         memcpy(&k_dst.at<uint8_t>({b, h, s}), &k_past.at<uint8_t>({b, h, s}), k_past.m_strides[2]);
         memcpy(&v_dst.at<uint8_t>({b, h, s}), &v_past.at<uint8_t>({b, h, s}), v_past.m_strides[2]);
