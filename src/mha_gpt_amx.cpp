@@ -39,6 +39,8 @@ struct mha_gpt_impl_amx : public mha_gpt::impl {
     uint8_t* _buffer_mat0_out = nullptr;
     uint8_t* _buffer_mat1_out = nullptr;
 
+    bool _is_bloom;
+
     llm_vector<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>*> gemAvB_BF16xBF16;
     llm_vector<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>*> qKtrGemm_BF16xBF16;
     llm_vector<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>*> qKVGemm_BF16xBF16;
@@ -70,7 +72,6 @@ void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_s
     // attn_output: [batch, query_seq_len, head_num * head_size]
     if (_num_threads == 0) {
         _num_threads = get_total_threads();
-        _head_size_aligned = rndup(head_size, 32);
         gemAvB_BF16xBF16.resize(_num_threads);
         for (size_t i = 0; i < _num_threads; i++) {
             gemAvB_BF16xBF16[i] = new amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>();
@@ -79,25 +80,32 @@ void mha_gpt_impl_amx::create(data_type_t in_type, size_t seq_len, size_t head_s
         for (size_t i = 0; i < _num_threads; i++) {
             qKtrGemm_BF16xBF16[i] = new amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>(false, !is_bloom);
         }
+        _is_bloom = is_bloom;
         qKVGemm_BF16xBF16.resize(_num_threads);
         for (size_t i = 0; i < _num_threads; i++) {
             qKVGemm_BF16xBF16[i] = new amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>(false, false);
         }
     }
 
+    // correct transposeB
+    if (_is_bloom != is_bloom) {
+        for (auto& mm : qKtrGemm_BF16xBF16) {
+            mm->transposeB = !is_bloom;
+        }
+        _is_bloom = is_bloom;
+    }
+
     auto buffer_mat0_out_size = seq_len * rndup(seq_len * sizeof(float), 64);
     if (buffer_mat0_out_size > _buffer_mat0_out_size) {
+        _head_size_aligned = rndup(head_size, 32);
         _buffer_mat0_out_size = seq_len * rndup(seq_len * sizeof(float), 64) * 3 / 2;
         _buffer_mat1_out_size = seq_len * _head_size_aligned * sizeof(float) * 3 / 2;
         if (_buffer_mat0_out)
             free(_buffer_mat0_out);
         if (_buffer_mat1_out)
             free(_buffer_mat1_out);
-
         _buffer_mat0_out = reinterpret_cast<uint8_t*>(aligned_alloc(64, _num_threads * _buffer_mat0_out_size));
-        memset(_buffer_mat0_out, 0, _num_threads * _buffer_mat0_out_size);
         _buffer_mat1_out = reinterpret_cast<uint8_t*>(aligned_alloc(64, _num_threads * _buffer_mat1_out_size));
-        memset(_buffer_mat1_out, 0, _num_threads * _buffer_mat1_out_size);
     }
 }
 
