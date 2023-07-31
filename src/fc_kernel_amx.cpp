@@ -10,6 +10,7 @@
 #include <cassert>
 
 #include "llm_fc.hpp"
+#include "llm_types.hpp"
 #include "mm_kernel_common_amx.hpp"
 #include "utility_kernel_avx512.hpp"
 #include "fc_kernel_amx.hpp"
@@ -35,13 +36,13 @@ using supported_key = std::tuple<data_type_t, data_type_t, data_type_t>;
 using supported_value = std::pair<size_t, size_t>;
 static bool check_valid_postops(size_t value, data_type_t dt_a, data_type_t dt_b, data_type_t dt_c) {
     llm_map<supported_key, supported_value> supported_postops = {
-        { { dnnl_s8, dnnl_s8, dnnl_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
-        { { dnnl_s8, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-        { { dnnl_s8, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-        { { dnnl_bf16, dnnl_bf16, dnnl_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
-        { { dnnl_bf16, dnnl_bf16, dnnl_f32 }, { 0, BIAS | GELU | GELU_TANH } },
-        { { dnnl_bf16, dnnl_s8, dnnl_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-        { { dnnl_bf16, dnnl_s8, dnnl_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_s8, llmdnn_s8, llmdnn_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_s8, llmdnn_s8, llmdnn_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_s8, llmdnn_s8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_bf16, llmdnn_bf16, llmdnn_f32 }, { 0, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_bf16, llmdnn_s8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_bf16, llmdnn_s8, llmdnn_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
     };
 
     auto it = supported_postops.find(std::make_tuple(dt_a, dt_b, dt_c));
@@ -64,32 +65,32 @@ static bool check_valid_postops(size_t value, data_type_t dt_a, data_type_t dt_b
 }
 
 // interface
-bool fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param) {
+status_t fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param) {
     fc_kernel* m = nullptr;
     if (param == nullptr || mm == nullptr) {
-        std::cout << "fc_kernel_create: invalid input parameter.\n";
+        DEBUG_LOG << "fc_kernel_create: invalid input parameter.\n";
         goto ERR;
     }
 
     if (!check_valid_postops(static_cast<size_t>(param->postops_type), param->dt_a, param->dt_b, param->dt_c)) {
-        std::cout << "fc_kernel_create: unsupported data type, a: " << param->dt_a <<", b: " << param->dt_b << ", c: " << param->dt_c <<
+        DEBUG_LOG << "fc_kernel_create: unsupported data type, a: " << param->dt_a <<", b: " << param->dt_b << ", c: " << param->dt_c <<
             ", postops type: " << param->postops_type << ".\n";
         goto ERR;
     }
 
     m = new fc_kernel;
-    if (param->dt_a == dnnl_s8 && param->dt_b == dnnl_s8) {
+    if (param->dt_a == llmdnn_s8 && param->dt_b == llmdnn_s8) {
         m->i8xi8 = std::make_unique<amx_kernel::Matmul<int8_t, int8_t>>(true, param->b_is_trans);
-    } else if (param->dt_a == dnnl_u8 && param->dt_b == dnnl_s8) {
+    } else if (param->dt_a == llmdnn_u8 && param->dt_b == llmdnn_s8) {
         m->u8xi8 = std::make_unique<amx_kernel::Matmul<uint8_t, int8_t>>(true, param->b_is_trans);
-    } else if (param->dt_a == dnnl_bf16 && param->dt_b == dnnl_bf16) {
+    } else if (param->dt_a == llmdnn_bf16 && param->dt_b == llmdnn_bf16) {
         m->bf16xbf16 = std::make_unique<amx_kernel::Matmul<bfloat16, bfloat16>>(true, param->b_is_trans);
-    } else if (param->dt_a == dnnl_bf16 && param->dt_b == dnnl_s8) {
+    } else if (param->dt_a == llmdnn_bf16 && param->dt_b == llmdnn_s8) {
         m->bf16xi8 = std::make_unique<amx_kernel::Matmul<bfloat16, int8_t>>(true, param->b_is_trans);
         m->bf16xi8->quant_scale_B = param->q;
         m->bf16xi8->dequant_scale_B = param->dq;
     } else {
-        std::cout << "fc_kernel_create: unsupport input type, a: " << param->dt_a << ", b: " << param->dt_b << ".\n";
+        DEBUG_LOG << "fc_kernel_create: unsupport input type, a: " << param->dt_a << ", b: " << param->dt_b << ".\n";
         goto ERR;
     }
 
@@ -100,10 +101,10 @@ bool fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param) {
     m->postops_type = param->postops_type;
 
     *mm = m;
-    return true;
+    return status_t::status_ok;
 ERR:
     delete m;
-    return false;
+    return status_t::status_invalid_arguments;
 }
 
 void fc_kernel_destroy_amx(const fc_kernel* mm) {
@@ -123,7 +124,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
         tensor2D<int8_t> a(M, K, reinterpret_cast<int8_t*>(ptr_a), lda);
         tensor2D<int8_t> b(b_d0, b_d1, reinterpret_cast<int8_t*>(ptr_b), ldb);
 
-        if (mm->dt_c == dnnl_s8) {
+        if (mm->dt_c == llmdnn_s8) {
             tensor2D<int8_t> c(M, N, reinterpret_cast<int8_t*>(ptr_c), ldc);
             if (!(mm->postops_type & BIAS)) {
                 if (mm->postops_type & GELU) {
@@ -160,7 +161,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 }
             }
-        } else if (mm->dt_c == dnnl_bf16) {
+        } else if (mm->dt_c == llmdnn_bf16) {
             tensor2D<bfloat16> c(M, N, reinterpret_cast<bfloat16*>(ptr_c), ldc);
             if (!bias) {
                 if (mm->postops_type & GELU) {
@@ -191,7 +192,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     (*mm->i8xi8)(a, b, n_start, n_end, ppkernel);
                 }
             }
-        } else if (mm->dt_c == dnnl_f32) {
+        } else if (mm->dt_c == llmdnn_f32) {
             tensor2D<float> c(M, N, reinterpret_cast<float*>(ptr_c), ldc);
             if (!bias) {
                 if (mm->postops_type & GELU) {
@@ -233,7 +234,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
         tensor2D<bfloat16> a(M, K, reinterpret_cast<bfloat16*>(ptr_a), lda);
         tensor2D<bfloat16> b(b_d0, b_d1, reinterpret_cast<bfloat16*>(ptr_b), ldb);
 
-        if (mm->dt_c == dnnl_bf16) {
+        if (mm->dt_c == llmdnn_bf16) {
             tensor2D<bfloat16> c(M, N, reinterpret_cast<bfloat16*>(ptr_c), ldc);
             if (!(mm->postops_type & BIAS)) {
                 if (mm->postops_type & GELU) {
@@ -258,7 +259,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     (*mm->bf16xbf16)(a, b, n_start, n_end, ppkernel);
                 }
             }
-        } else if (mm->dt_c == dnnl_f32) {
+        } else if (mm->dt_c == llmdnn_f32) {
             tensor2D<float> c(M, N, reinterpret_cast<float*>(ptr_c), ldc);
             if (!(mm->postops_type & BIAS)) {
                 if (mm->postops_type & GELU) {
@@ -288,7 +289,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
         tensor2D<bfloat16> a(M, K, reinterpret_cast<bfloat16*>(ptr_a), lda);
         tensor2D<bfloat16> b(N, K, reinterpret_cast<bfloat16*>(ptr_b), ldb);
 
-        if (mm->dt_c == dnnl_bf16) {
+        if (mm->dt_c == llmdnn_bf16) {
             tensor2D<bfloat16> c(M, N, reinterpret_cast<bfloat16*>(ptr_c), ldc);
             if (!(mm->postops_type & BIAS)) {
                 if (mm->postops_type & GELU) {
@@ -313,7 +314,7 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
                     (*mm->bf16xi8)(a, b, n_start, n_end, ppkernel);
                 }
             }
-        } else if (mm->dt_c == dnnl_f32) {
+        } else if (mm->dt_c == llmdnn_f32) {
             tensor2D<float> c(M, N, reinterpret_cast<float*>(ptr_c), ldc);
             if (!(mm->postops_type & BIAS)) {
                 if (mm->postops_type & GELU) {
@@ -351,4 +352,4 @@ void fc_kernel_bf16w8_get_q_dq_amx(size_t K, size_t N, size_t stride, void* ptr,
     *dq = max / 127;
 }
 
-}
+}  // namespace llmdnn

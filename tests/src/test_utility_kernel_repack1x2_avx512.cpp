@@ -131,7 +131,7 @@ protected:
 };
 
 TEST_P(RepackTest, Func) {
-    if (_types == dnnl_s8) {
+    if (_types == llmdnn_s8) {
         test<int8_t>();
     } else {
         test<ov::bfloat16>();
@@ -139,7 +139,7 @@ TEST_P(RepackTest, Func) {
 }
 
 const std::vector<data_type_t> types = {
-    dnnl_s8, dnnl_bf16
+    llmdnn_s8, llmdnn_bf16
 };
 
 INSTANTIATE_TEST_SUITE_P(smoke_Repack, RepackTest,

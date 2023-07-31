@@ -23,32 +23,32 @@ namespace llmdnn {
 
 template <typename T>
 struct precision_of {
-    static constexpr data_type_t value = dnnl_data_type_undef;
+    static constexpr data_type_t value = llmdnn_data_type_undef;
 };
 
 template <>
 struct precision_of<float> {
-    static constexpr data_type_t value = dnnl_f32;
+    static constexpr data_type_t value = llmdnn_f32;
 };
 
 template <>
 struct precision_of<int32_t> {
-    static constexpr data_type_t value = dnnl_s32;
+    static constexpr data_type_t value = llmdnn_s32;
 };
 
 template <>
 struct precision_of<ov::bfloat16> {
-    static constexpr data_type_t value = dnnl_bf16;
+    static constexpr data_type_t value = llmdnn_bf16;
 };
 
 template <>
 struct precision_of<uint8_t> {
-    static constexpr data_type_t value = dnnl_u8;
+    static constexpr data_type_t value = llmdnn_u8;
 };
 
 template <>
 struct precision_of<int8_t> {
-    static constexpr data_type_t value = dnnl_s8;
+    static constexpr data_type_t value = llmdnn_s8;
 };
 
 
@@ -61,7 +61,7 @@ struct tensor {
     void* m_ptr = nullptr;
     size_t m_capacity = 0;          // 0 means not own m_ptr
     size_t m_element_size = 0;
-    data_type_t m_dtype = dnnl_data_type_undef;
+    data_type_t m_dtype = llmdnn_data_type_undef;
 
     tensor();
     ~tensor();

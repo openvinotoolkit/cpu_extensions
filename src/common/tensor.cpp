@@ -8,6 +8,7 @@
 #include <vector>
 #include <iostream>
 
+#include "common/log.hpp"
 #include "bf16.hpp"
 #include "llm_tensor.hpp"
 
@@ -99,7 +100,6 @@ tensor tensor::reshape(const std::initializer_list<size_t>& target_shape) const 
     // only valid for dense memory
     tensor new_tensor_view;
     assert(is_dense());
-    //assert(shape_size(target_shape) == shape_size(m_dims));
     new_tensor_view.resize(std::vector<size_t>(target_shape), m_ptr, m_element_size, m_dtype);
     return new_tensor_view;
 }
@@ -149,16 +149,16 @@ void tensor::resize(const size_t* new_dims, size_t dim_num, void* data, size_t e
 
 void tensor::assert_dims(const std::initializer_list<size_t>& expect_dims) const {
     if (m_rank != expect_dims.size()) {
-        std::cout << "dims not same\n";
+        DEBUG_LOG << "dims not same\n";
     }
     if (!std::equal(expect_dims.begin(), expect_dims.end(), m_dims)) {
-        std::cout << " m_dims=[";
+        DEBUG_LOG << " m_dims=[";
         for (size_t i = 0; i < m_rank; i++)
-            std::cout << m_dims[i] << ",";
-        std::cout << "] expect_dims=[";
+            DEBUG_LOG << m_dims[i] << ",";
+        DEBUG_LOG << "] expect_dims=[";
         for (auto& i : expect_dims)
-            std::cout << i << ",";
-        std::cout << "]";
+            DEBUG_LOG << i << ",";
+        DEBUG_LOG << "]";
     }
 }
 

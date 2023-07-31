@@ -7,16 +7,16 @@
 #include <vector>
 #include <memory.h>
 
+#include "common/log.hpp"
 #include "common/bf16.hpp"
 #include "common/simple_parallel.hpp"
 #include "common/utility.hpp"
+#include "llm_types.hpp"
 #include "utility_kernel_avx512.hpp"
 #include "transpose_kernel_avx512.hpp"
 #include "llm_emb_gpt.hpp"
 #include "emb_gpt_avx512.hpp"
 #include "rotary_kernel_avx512.hpp"
-
-using namespace utility;
 
 namespace llmdnn {
 
@@ -86,30 +86,30 @@ static void rotary_emb_position2d(const tensor& q_src,
     });
 }
 
-void emb_gpt_avx512(const tensor& q_src,
-                    const tensor& k_src,
-                    const tensor& v_src,
-                    const tensor& k_past,
-                    const tensor& v_past,
-                    const tensor& q_dst,
-                    const tensor& k_dst,
-                    const tensor& v_dst,
-                    const tensor& cos,
-                    const tensor& sin,
-                    const tensor& position2d_ids) {
+status_t emb_gpt_avx512(const tensor& q_src,
+                        const tensor& k_src,
+                        const tensor& v_src,
+                        const tensor& k_past,
+                        const tensor& v_past,
+                        const tensor& q_dst,
+                        const tensor& k_dst,
+                        const tensor& v_dst,
+                        const tensor& cos,
+                        const tensor& sin,
+                        const tensor& position2d_ids) {
     if (q_src.m_rank != 4 || k_src.m_rank != 4 || v_src.m_rank != 4 || k_past.m_rank != 4 || v_past.m_rank != 4 || q_dst.m_rank != 4||
         k_dst.m_rank != 4 || v_dst.m_rank != 4 || cos.m_rank != 4 || sin.m_rank != 4) {
-        std::cout << "emb_gpt_avx512: rank is not correct: should be 4\n";
-        return;
+        DEBUG_LOG << "emb_gpt_avx512: rank is not correct: should be 4\n";
+        return status_t::status_invalid_arguments;
     }
     if (position2d_ids) {
         if (position2d_ids.m_rank != 3) {
-            std::cout << "emb_gpt_avx512: position2d_ids rank should be 3\n";
-            return;
+            DEBUG_LOG << "emb_gpt_avx512: position2d_ids rank should be 3\n";
+            return status_t::status_invalid_arguments;
         }
         if (position2d_ids.m_dims[0] != q_src.m_dims[0] || position2d_ids.m_dims[1] != 2 || position2d_ids.m_dims[2] != q_src.m_dims[1]) {
-            std::cout << "emb_gpt_avx512: position2d_ids dims should be [batch, 2, seq_len]\n";
-            return;
+            DEBUG_LOG << "emb_gpt_avx512: position2d_ids dims should be [batch, 2, seq_len]\n";
+            return status_t::status_invalid_arguments;
         }
     }
 
@@ -125,7 +125,7 @@ void emb_gpt_avx512(const tensor& q_src,
     // transpose: [batch, seq_len, head_hum, 3 * head_size] -->
     //          3 [batch, head_hum, seq_len, head_size]
     // rotary embbeding: part of key will write to past_key, part of query will write to tempory buffer
-    if (q_src.m_dtype == dnnl_s8) {
+    if (q_src.m_dtype == llmdnn_s8) {
         assert(false);
     } else {
         // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
@@ -133,6 +133,8 @@ void emb_gpt_avx512(const tensor& q_src,
         // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
         rotary_emb_position2d(q_src, k_src, v_src, k_past, v_past, q_dst, k_dst, v_dst, cos, sin, position2d_ids);
     }
+
+    return status_t::status_ok;
 }
 
-}
+}  // namespace llmdnn

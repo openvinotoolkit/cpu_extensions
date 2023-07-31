@@ -2147,7 +2147,7 @@ struct Matmul<ov::bfloat16, int8_t, float> {
             // this dynamic quantization of weight matrix using minmax
             // is time-consuming, should be used only for constB
             if (!constB) {
-                std::cout << "\t WANING: dynamic quantization of weight matrix for non-constB is time-consuming " << std::endl;
+                DEBUG_LOG << "\t WANING: dynamic quantization of weight matrix for non-constB is time-consuming " << std::endl;
             }
             // float min, max;
             // functional::get_min_max(_matB, min, max);

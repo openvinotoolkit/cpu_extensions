@@ -67,7 +67,7 @@ protected:
             _dt_a, _dt_b, _dt_c,
             _is_transpose, _postops_type
         };
-        ASSERT_TRUE(fc_kernel_create(&fc, &param));
+        ASSERT_TRUE(fc_kernel_create(&fc, &param) == llmdnn::status_ok);
         auto gemm = std::shared_ptr<fc_kernel>(fc, [](fc_kernel* p) { fc_kernel_destroy(p); });
 
         tensor2D<TA> A(_M, _K, true);
@@ -138,19 +138,19 @@ protected:
 };
 
 TEST_P(FCKernelTest, Func) {
-    if (_dt_a == dnnl_s8 && _dt_b == dnnl_s8 && _dt_c == dnnl_s8) {
+    if (_dt_a == llmdnn_s8 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_s8) {
         do_test<int8_t, int8_t, int8_t>();
-    } else if (_dt_a == dnnl_s8 && _dt_b == dnnl_s8 && _dt_c == dnnl_bf16) {
+    } else if (_dt_a == llmdnn_s8 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_bf16) {
         do_test<int8_t, int8_t, ov::bfloat16>();
-    } else if (_dt_a == dnnl_s8 && _dt_b == dnnl_s8 && _dt_c == dnnl_f32) {
+    } else if (_dt_a == llmdnn_s8 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_f32) {
         do_test<int8_t, int8_t, float>();
-    } else if (_dt_a == dnnl_bf16 && _dt_b == dnnl_bf16 && _dt_c == dnnl_bf16) {
+    } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_bf16 && _dt_c == llmdnn_bf16) {
         do_test<ov::bfloat16, ov::bfloat16, ov::bfloat16>();
-    } else if (_dt_a == dnnl_bf16 && _dt_b == dnnl_bf16 && _dt_c == dnnl_f32) {
+    } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_bf16 && _dt_c == llmdnn_f32) {
         do_test<ov::bfloat16, ov::bfloat16, float>();
-    } else if (_dt_a == dnnl_bf16 && _dt_b == dnnl_s8 && _dt_c == dnnl_f32) {
+    } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_f32) {
         do_test<ov::bfloat16, int8_t, float>();
-    } else if (_dt_a == dnnl_bf16 && _dt_b == dnnl_s8 && _dt_c == dnnl_bf16) {
+    } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_bf16) {
         do_test<ov::bfloat16, int8_t, ov::bfloat16>();
     } else {
         ASSERT_TRUE(false);
@@ -166,45 +166,45 @@ TEST_P(FCKernelTest, Func) {
 //  (bf16,s8,f32),dq,[bias],[gelu]
 //  (bf16,s8,bf16),dq,[bias],[gelu]
 const std::vector<FCKernelTestDTPost> types = {
-    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_QUANT },
-    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_BIAS_QUANT },
-    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_GELU_QUANT },
-    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_BIAS_GELU_QUANT },
-    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_GELU_TANH_QUANT },
-    { dnnl_s8, dnnl_s8, dnnl_s8, DEQUANT_BIAS_GELU_TANH_QUANT },
-    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT },
-    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_BIAS },
-    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_GELU },
-    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_BIAS_GELU },
-    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_GELU_TANH },
-    { dnnl_s8, dnnl_s8, dnnl_bf16, DEQUANT_BIAS_GELU_TANH },
-    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT },
-    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_BIAS },
-    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_GELU },
-    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_BIAS_GELU },
-    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_GELU_TANH },
-    { dnnl_s8, dnnl_s8, dnnl_f32, DEQUANT_BIAS_GELU_TANH },
-    { dnnl_bf16, dnnl_bf16, dnnl_bf16, NONE },
-    { dnnl_bf16, dnnl_bf16, dnnl_bf16, BIAS },
-    { dnnl_bf16, dnnl_bf16, dnnl_bf16, GELU },
-    { dnnl_bf16, dnnl_bf16, dnnl_bf16, BIAS_GELU },
-    { dnnl_bf16, dnnl_bf16, dnnl_bf16, GELU_TANH },
-    { dnnl_bf16, dnnl_bf16, dnnl_bf16, BIAS_GELU_TANH },
-    { dnnl_bf16, dnnl_bf16, dnnl_f32, NONE },
-    { dnnl_bf16, dnnl_bf16, dnnl_f32, BIAS },
-    { dnnl_bf16, dnnl_bf16, dnnl_f32, GELU },
-    { dnnl_bf16, dnnl_bf16, dnnl_f32, BIAS_GELU },
-    { dnnl_bf16, dnnl_bf16, dnnl_f32, GELU_TANH },
-    { dnnl_bf16, dnnl_bf16, dnnl_f32, BIAS_GELU_TANH },
+    { llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_QUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_BIAS_QUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_GELU_QUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_BIAS_GELU_QUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_GELU_TANH_QUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_BIAS_GELU_TANH_QUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_bf16, DEQUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_bf16, DEQUANT_BIAS },
+    { llmdnn_s8, llmdnn_s8, llmdnn_bf16, DEQUANT_GELU },
+    { llmdnn_s8, llmdnn_s8, llmdnn_bf16, DEQUANT_BIAS_GELU },
+    { llmdnn_s8, llmdnn_s8, llmdnn_bf16, DEQUANT_GELU_TANH },
+    { llmdnn_s8, llmdnn_s8, llmdnn_bf16, DEQUANT_BIAS_GELU_TANH },
+    { llmdnn_s8, llmdnn_s8, llmdnn_f32, DEQUANT },
+    { llmdnn_s8, llmdnn_s8, llmdnn_f32, DEQUANT_BIAS },
+    { llmdnn_s8, llmdnn_s8, llmdnn_f32, DEQUANT_GELU },
+    { llmdnn_s8, llmdnn_s8, llmdnn_f32, DEQUANT_BIAS_GELU },
+    { llmdnn_s8, llmdnn_s8, llmdnn_f32, DEQUANT_GELU_TANH },
+    { llmdnn_s8, llmdnn_s8, llmdnn_f32, DEQUANT_BIAS_GELU_TANH },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16, NONE },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16, BIAS },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16, GELU },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16, BIAS_GELU },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16, GELU_TANH },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16, BIAS_GELU_TANH },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, NONE },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, BIAS },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, GELU },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, BIAS_GELU },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, GELU_TANH },
+    { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, BIAS_GELU_TANH },
     // TODO: support weight compression
-    // { dnnl_bf16, dnnl_s8, dnnl_f32, DEQUANT },
-    // { dnnl_bf16, dnnl_s8, dnnl_f32, DEQUANT_BIAS },
-    // { dnnl_bf16, dnnl_s8, dnnl_f32, DEQUANT_GELU },
-    // { dnnl_bf16, dnnl_s8, dnnl_f32, DEQUANT_BIAS_GELU },
-    // { dnnl_bf16, dnnl_s8, dnnl_bf16, DEQUANT },
-    // { dnnl_bf16, dnnl_s8, dnnl_bf16, DEQUANT_BIAS },
-    // { dnnl_bf16, dnnl_s8, dnnl_bf16, DEQUANT_GELU },
-    // { dnnl_bf16, dnnl_s8, dnnl_bf16, DEQUANT_BIAS_GELU },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_f32, DEQUANT },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_f32, DEQUANT_BIAS },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_f32, DEQUANT_GELU },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_f32, DEQUANT_BIAS_GELU },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, DEQUANT },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, DEQUANT_BIAS },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, DEQUANT_GELU },
+    // { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, DEQUANT_BIAS_GELU },
 };
 
 // M, N, K

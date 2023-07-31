@@ -32,14 +32,14 @@ using namespace llmdnn;
 
 std::string dtype_to_str(data_type_t type) {
     switch (type) {
-        case dnnl_data_type_undef: return "undef";
-        case dnnl_f16: return "f16";
-        case dnnl_bf16: return "bf16";
-        case dnnl_f32: return "f32";
-        case dnnl_s32: return "s32";
-        case dnnl_s8: return "s8";
-        case dnnl_u8: return "u8";
-        case dnnl_f64: return "f64";
+        case llmdnn_data_type_undef: return "undef";
+        case llmdnn_f16: return "f16";
+        case llmdnn_bf16: return "bf16";
+        case llmdnn_f32: return "f32";
+        case llmdnn_s32: return "s32";
+        case llmdnn_s8: return "s8";
+        case llmdnn_u8: return "u8";
+        case llmdnn_f64: return "f64";
         default: return "unkown";
     }
 }
@@ -62,7 +62,7 @@ bool initXTILE() {
     return true;
 }
 
-namespace utility {
+namespace llmdnn {
 
 size_t get_total_threads() {
     return omp_get_max_threads();

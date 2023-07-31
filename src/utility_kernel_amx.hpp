@@ -92,18 +92,4 @@ struct tileconfig_t {
     void store() {
         _tile_storeconfig(this);
     }
-
-    friend std::ostream& operator<<(std::ostream& out, const tileconfig_t& cfg) {
-        out << " palette_id=" << static_cast<int>(cfg.palette_id);
-        out << " startRow=" << static_cast<int>(cfg.startRow);
-        out << " row x colsb=(";
-        for (int i = 0; i < 16;i++) {
-            if (cfg.rows[i] == 0 && cfg.cols[i] == 0)
-                continue;
-            if (i > 0) out << ",";
-            out << static_cast<int>(cfg.rows[i]) << "x" << static_cast<int>(cfg.cols[i]);
-        }
-        out << ")";
-        return out;
-    }
 } __attribute__ ((__packed__));

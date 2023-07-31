@@ -223,4 +223,4 @@ namespace llmdnn {
             }
         }
     }
-}
+}  // namespace llmdnn

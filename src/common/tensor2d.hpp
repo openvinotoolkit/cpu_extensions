@@ -12,6 +12,7 @@
 #ifdef ENABLE_NUMA
 #include "numa.h"
 #endif
+#include "log.hpp"
 #include "bf16.hpp"
 
 #define rndup(x, n) (((x + n - 1)/n)*n)
@@ -122,7 +123,7 @@ struct tensor2D {
             if (is_const)
                 memset(static_cast<void*>(data), 0, need_capacity);
             if (reinterpret_cast<uintptr_t>(data) % 64)
-                std::cout << "WARNING: resize(), data is not cache-line aligned!" << std::endl;
+                DEBUG_LOG << "WARNING: resize(), data is not cache-line aligned!" << std::endl;
         }
         // put a NaN at the end to test over-read
         // https://en.wikipedia.org/wiki/Bfloat16_floating-point_format

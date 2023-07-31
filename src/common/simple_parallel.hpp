@@ -9,7 +9,7 @@
 #include <string>
 #include <functional>
 
-namespace utility {
+namespace llmdnn {
 
 size_t get_total_threads();
 void simple_parallel_for(const size_t total, const std::function<void(size_t)>& fn);
@@ -178,4 +178,4 @@ void parallel_for3d(const T0& D0, const T1& D1, const T2& D2, const F& func) {
     }
 }
 
-}  // namespace utility
+}  // namespace llmdnn

@@ -15,6 +15,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                                   $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_options(${PROJECT_NAME} PRIVATE ${EXTRA_CXX_FLAGS})
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
+if(CPU_EXTENSIONS_ENABLE_LOG)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_LOG)
+endif()
 
 set(CMAKE_DST lib/cmake/${PROJECT_NAME})
 # header files

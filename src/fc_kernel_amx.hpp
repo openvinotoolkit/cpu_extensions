@@ -6,7 +6,7 @@
 
 namespace llmdnn {
 
-bool fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param);
+status_t fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param);
 
 void fc_kernel_destroy_amx(const fc_kernel* mm);
 
@@ -15,4 +15,4 @@ void fc_kernel_execute_amx(const fc_kernel* mm, void* ptr_a, void* ptr_b, void* 
 
 void fc_kernel_bf16w8_get_q_dq_amx(size_t K, size_t N, size_t stride, void* ptr, float* q, float* dq);
 
-}
+}  // namespace llmdnn

@@ -383,4 +383,4 @@ namespace llmdnn {
         dst = _mm512_mul_ps(dst, x);
         return dst;
     }
-}
+}  // namespace llmdnn

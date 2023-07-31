@@ -93,7 +93,7 @@ protected:
 };
 
 TEST_P(RotaryTestAVX2, rotary) {
-    if (_types == dnnl_s8) {
+    if (_types == llmdnn_s8) {
         ASSERT_TRUE(false);        
     } else {
         test<float>(0.01f);
@@ -101,7 +101,7 @@ TEST_P(RotaryTestAVX2, rotary) {
 }
 
 const std::vector<data_type_t> types = {
-    dnnl_f32
+    llmdnn_f32
 };
 
 INSTANTIATE_TEST_SUITE_P(smoke_Rotary, RotaryTestAVX2,

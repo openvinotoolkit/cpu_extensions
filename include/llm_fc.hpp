@@ -60,7 +60,7 @@ struct fc_kernel;
 ///        fc: (bf16,s8,f32),dq,[bias],[gelu]
 ///        fc: (bf16,s8,bf16),dq,[bias],[gelu]
 ///
-bool fc_kernel_create(fc_kernel** mm, const fc_create_param* param);
+status_t fc_kernel_create(fc_kernel** mm, const fc_create_param* param);
 void fc_kernel_destroy(const fc_kernel* mm);
 void fc_kernel_execute(const fc_kernel* mm,
         void* ptr_a, void* ptr_b, void* ptr_c, size_t lda, size_t ldb, size_t ldc,
@@ -71,4 +71,4 @@ void fc_kernel_execute(const fc_kernel* mm,
 /// compute weight min/max once, set q, dq for each fc_kernel instance
 void fc_kernel_bf16w8_get_q_dq(size_t K, size_t N, size_t stride, void* ptr, float* q, float* dq);
 
-}
+}  // namespace llmdnn

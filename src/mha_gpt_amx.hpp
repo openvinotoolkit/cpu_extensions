@@ -14,4 +14,4 @@ namespace llmdnn {
 
 mha_gpt::impl* new_impl_amx();
 
-}
+}  // namespace llmdnn

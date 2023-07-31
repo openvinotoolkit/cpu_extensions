@@ -26,10 +26,10 @@ struct mm_kernel;
 ///        matmul: (bf16,bf16,f32)
 ///        gemv: (bf16,bf16,f32)
 ///
-bool mm_kernel_create(mm_kernel** mm, const mm_create_param* param);
+status_t mm_kernel_create(mm_kernel** mm, const mm_create_param* param);
 void mm_kernel_destroy(const mm_kernel* mm);
 
-void mm_kernel_execute(const mm_kernel* mm, void* ptr_a, void* ptr_b, void* ptr_c, size_t lda, size_t ldb, size_t ldc,
+status_t mm_kernel_execute(const mm_kernel* mm, void* ptr_a, void* ptr_b, void* ptr_c, size_t lda, size_t ldb, size_t ldc,
         size_t M, size_t N, size_t K);
 
-}
+}  // namespace llmdnn

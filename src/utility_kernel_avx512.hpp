@@ -202,4 +202,4 @@ inline void mul_add2_select_f32_avx512(float* dst, float* src, float mul, float*
     }
 }
 
-}
+}  // namespace llmdnn

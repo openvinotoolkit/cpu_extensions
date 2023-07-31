@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 
+#include "common/log.hpp"
 #include "common/simple_parallel.hpp"
 #include "common/tensor2d.hpp"
 #include "common/utility.hpp"
@@ -17,15 +18,13 @@
 #include "llm_mha_gpt.hpp"
 #include "mha_gpt_amx.hpp"
 
-using namespace utility;
-
 namespace llmdnn {
 
 struct mha_gpt_impl_amx : public mha_gpt::impl {
     mha_gpt_impl_amx() = default;
     ~mha_gpt_impl_amx();
     void create(data_type_t in_type, size_t seq_len, size_t head_size, bool is_bloom);
-    void exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask,
+    status_t exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask,
               const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask) override;
 
     void mha_bf16(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask,
@@ -123,12 +122,12 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
     auto& gemAvB_ops = gemAvB_BF16xBF16;
     auto& qKtrGemm_ops = qKtrGemm_BF16xBF16;
     auto& qKVGemm_ops = qKVGemm_BF16xBF16;
-    bool use_vector = query_seq_len == 1 && head_size >= 32 && head_size <= 32 * 6 && !is_bloom && !alibi && attn_mask && !causal_mask;
+    bool use_gemv = query_seq_len == 1 && head_size >= 32 && head_size <= 32 * 6 && !is_bloom && !alibi && attn_mask && !causal_mask;
     size_t head_stride_in_attn = head_size;
     size_t batch_stride_in_attn = head_size * head_num * query_seq_len;
     size_t causal_mask_offset_start = use_causal_mask ? key_seq_len - query_seq_len : key_seq_len;
 
-    if (use_vector) {
+    if (use_gemv) {
         parallel_for2d(batch, head_num, [&](size_t thread_id, size_t i0, size_t i1) {
             auto q_sub = &q.at<uint8_t>({i0, i1});
             auto k_sub = &k.at<uint8_t>({i0, i1});
@@ -157,8 +156,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 head_size, _head_size_aligned * sizeof(float), head_num * head_size * sizeof(ov::bfloat16), nullptr);
         });
     } else {
-        size_t seq_cout_all = rndup(query_seq_len, 32) / 32;
-        auto work_amount = batch * head_num * seq_cout_all;
+        size_t seq_count_all = rndup(query_seq_len, 32) / 32;
+        auto work_amount = batch * head_num * seq_count_all;
         parallel_for(_num_threads, [&](size_t thread_id) {
             size_t i0;
             size_t i1;
@@ -167,13 +166,13 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
             splitter(work_amount, _num_threads, thread_id, start, end);
             if (start >= work_amount) return;
 
-            parallel_it_init(start, i0, batch, i1, head_num, seq, seq_cout_all);
+            parallel_it_init(start, i0, batch, i1, head_num, seq, seq_count_all);
             ov::bfloat16* prev_k = nullptr;
             ov::bfloat16* prev_v = nullptr;
             for (size_t iwork = start; iwork < end; ++iwork) {
                 auto seq_start = seq * 32;
                 auto seq_end = std::min(seq_start + 32, query_seq_len);
-                auto seq_cout = seq_end - seq_start;
+                auto seq_count = seq_end - seq_start;
                 // q: [batch, head_num, query_seq_len, head_size]
                 // k: [batch, head_num, key_seq_len, head_size]
                 // v: [batch, head_num, value_seq_len, head_size]
@@ -184,8 +183,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 auto mat0_out = reinterpret_cast<float*>(_buffer_mat0_out + thread_id * _buffer_mat0_out_size);
                 auto mat1_out = reinterpret_cast<float*>(_buffer_mat1_out + thread_id * _buffer_mat1_out_size);
                 
-                tensor2D<ov::bfloat16> matQ(seq_cout, head_size, q_sub, q.m_strides[2]);
-                tensor2D<float> matQK(seq_cout, key_seq_len, mat0_out, rndup(key_seq_len * sizeof(float), 64));
+                tensor2D<ov::bfloat16> matQ(seq_count, head_size, q_sub, q.m_strides[2]);
+                tensor2D<float> matQK(seq_count, key_seq_len, mat0_out, rndup(key_seq_len * sizeof(float), 64));
                 amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
                 if (!is_bloom) {
                     tensor2D<ov::bfloat16> matK(key_seq_len, head_size, k_sub, k.m_strides[2]);
@@ -195,13 +194,12 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                     (*qKtrGemm_ops[thread_id])(matQ, matK, 0, key_seq_len, pp, k_sub == prev_k);
                 }
                 prev_k = k_sub;
-                tensor2D<ov::bfloat16> softmax_dst(seq_cout, key_seq_len, reinterpret_cast<ov::bfloat16*>(mat0_out), rndup(key_seq_len * sizeof(ov::bfloat16), 64));
-                // no attention mask
+                tensor2D<ov::bfloat16> softmax_dst(seq_count, key_seq_len, reinterpret_cast<ov::bfloat16*>(mat0_out), rndup(key_seq_len * sizeof(ov::bfloat16), 64));
                 size_t valid_softmax_items = std::min(causal_mask_offset_start + seq_start + 1, key_seq_len);
                 // attn: [batch, 1, 1, key_seq_len] or [batch, 1, query_seq_len, key_seq_len]
                 // alibi: [batch, num_heads, 1, key_seq_len]
                 // causal: [batch/1, 1, query_seq_len, key_seq_len]
-                for (uint32_t m = 0; m < seq_cout; m++) {
+                for (uint32_t m = 0; m < seq_count; m++) {
                     auto attn_sub = attn_mask ? &attn_mask.at<float>({i0, 0, attn_mask.m_dims[2] == 1 ? 0 : m + seq_start}) : nullptr;
                     auto alibi_sub = alibi ? &alibi.at<float>({i0, i1}) : nullptr;
                     auto causal_mask_sub = causal_mask ? &causal_mask.at<uint8_t>({causal_mask.m_dims[0] == 1 ? 0 : i0, 0, m + seq_start}) : nullptr;
@@ -218,60 +216,61 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
 
                 auto out_sub = out + (i0 * batch_stride_in_attn + i1 * head_stride_in_attn
                     + seq_start * head_stride_in_attn * head_num) * sizeof(ov::bfloat16);
-                tensor2D<ov::bfloat16> matQKBF16(seq_cout, key_seq_len, softmax_dst.data, softmax_dst.stride);
+                tensor2D<ov::bfloat16> matQKBF16(seq_count, key_seq_len, softmax_dst.data, softmax_dst.stride);
                 tensor2D<ov::bfloat16> matV(key_seq_len, head_size, v_sub, v.m_strides[2]);
-                tensor2D<float> matQKV(seq_cout, head_size, mat1_out, _head_size_aligned * sizeof(float));
+                tensor2D<float> matQKV(seq_count, head_size, mat1_out, _head_size_aligned * sizeof(float));
                 amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp2(matQKV);
                 (*qKVGemm_ops[thread_id])(matQKBF16, matV, 0, head_size, pp2, prev_v == v_sub);
                 prev_v = v_sub;
-                memcpy2d_stride_avx512<ov::bfloat16>(reinterpret_cast<ov::bfloat16*>(out_sub), mat1_out, seq_cout,
+                memcpy2d_stride_avx512<ov::bfloat16>(reinterpret_cast<ov::bfloat16*>(out_sub), mat1_out, seq_count,
                     head_size, _head_size_aligned * sizeof(float), head_num * head_size * sizeof(ov::bfloat16), nullptr);
-                parallel_it_step(i0, batch, i1, head_num, seq, seq_cout_all);
+                parallel_it_step(i0, batch, i1, head_num, seq, seq_count_all);
             }
         });
     }
 }
 
-void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask) {
+status_t mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, const tensor& output, const tensor& attn_mask, const tensor& alibi, const tensor& causal_mask, bool select_nfltmax_at_0, float normal_factor, bool use_causal_mask) {
     if (q.m_rank != 4 || k.m_rank != 4 || v.m_rank != 4) {
-        std::cout << "q,k,v rank does not equal 4.\n";
-        return;
+        DEBUG_LOG << "q,k,v rank does not equal 4.\n";
+        return status_t::status_invalid_arguments;
     }
     if (output.m_rank != 3) {
-        std::cout << "output rank should be 3.\n";
+        DEBUG_LOG << "output rank should be 3.\n";
+        return status_t::status_invalid_arguments;
     }
     if (attn_mask) {
         if (attn_mask.m_rank != 4) {
-            std::cout << "attn_mask rank should be 4.\n";
-            return;
+            DEBUG_LOG << "attn_mask rank should be 4.\n";
+            return status_t::status_invalid_arguments;
         }
         if (attn_mask.m_dims[1] != 1) {
-            std::cout << "attn_mask dim 1 should be 1.\n";
-            return;
+            DEBUG_LOG << "attn_mask dim 1 should be 1.\n";
+            return status_t::status_invalid_arguments;
         }
     }
     if (alibi) {
         if (alibi.m_rank != 4) {
-            std::cout << "alibi rank should be 4.\n";
-            return;
+            DEBUG_LOG << "alibi rank should be 4.\n";
+            return status_t::status_invalid_arguments;
         }
         if (alibi.m_dims[1] != k.m_dims[1]) {
-            std::cout << "alibi dim 1 should be equal to k dim 1.\n";
-            return;
+            DEBUG_LOG << "alibi dim 1 should be equal to k dim 1.\n";
+            return status_t::status_invalid_arguments;
         }
         if (alibi.m_dims[2] != 1) {
-            std::cout << "alibi dim 2 should be 1.\n";
-            return;
+            DEBUG_LOG << "alibi dim 2 should be 1.\n";
+            return status_t::status_invalid_arguments;
         }
     }
     if (causal_mask) {
         if (causal_mask.m_rank != 4) {
-            std::cout << "causal_mask rank should be 4.\n";
-            return;
+            DEBUG_LOG << "causal_mask rank should be 4.\n";
+            return status_t::status_invalid_arguments;
         }
         if (use_causal_mask) {
-            std::cout << "use_causal_mask must be false to disable builtin causal mask.\n";
-            return;
+            DEBUG_LOG << "use_causal_mask must be false to disable builtin causal mask.\n";
+            return status_t::status_invalid_arguments;
         }
     }
     auto batch = q.m_dims[0];
@@ -283,8 +282,8 @@ void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, c
           head_num == k.m_dims[1] && head_num == v.m_dims[1] &&
           key_seq_len == v.m_dims[2] &&
           head_size == k.m_dims[3] && head_size == v.m_dims[3])) {
-        std::cout << "dim of q,k,v is error.\n";
-        return;
+        DEBUG_LOG << "dim of q,k,v is error.\n";
+        return status_t::status_invalid_arguments;
     }
 
     bool is_bloom = k.m_strides[3] > k.m_strides[2];
@@ -292,16 +291,19 @@ void mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& v, c
     auto in_dtype = q.m_dtype;
     auto out_dtype = output.m_dtype;
 
-    if (in_dtype == dnnl_bf16 && out_dtype == dnnl_bf16) {
+    if (in_dtype == llmdnn_bf16 && out_dtype == llmdnn_bf16) {
         create(in_dtype, key_seq_len, head_size, is_bloom);
         mha_bf16(q, k, v, output, attn_mask, alibi, causal_mask, select_nfltmax_at_0, normal_factor, use_causal_mask);
     } else {
-        std::cout << "doesn't support provided input precisions.\n";
+        DEBUG_LOG << "doesn't support provided input precisions.\n";
+        return status_t::status_invalid_arguments;
     }
+
+    return status_t::status_ok;
 }
 
 mha_gpt::impl* new_impl_amx() {
     return new mha_gpt_impl_amx();
 }
 
-}
+}  // namespace llmdnn

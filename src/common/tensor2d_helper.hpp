@@ -73,7 +73,7 @@ bool operator==(const tensor2D<T>& lhs, const tensor2D<T>& rhs) {
             float f0 = lhs(i0,i1);
             float f1 = rhs(i0,i1);
             if (isnan2(f1) || isnan2(f0)) {
-                std::cout << " nan is found: f0=" << f0 << ",  f1=" << f1 << std::endl;
+                DEBUG_LOG << " nan is found: f0=" << f0 << ",  f1=" << f1 << std::endl;
                 return false;
             }
             if (std::abs(f0 - f1) <= 0.01)
@@ -82,7 +82,7 @@ bool operator==(const tensor2D<T>& lhs, const tensor2D<T>& rhs) {
 
         if (lhs(i0,i1) == rhs(i0,i1))
             continue;
-        std::cout << " operator== failed at (" << i0 << ", " << i1 << ")  value "
+        DEBUG_LOG << " operator== failed at (" << i0 << ", " << i1 << ")  value "
                     << lhs(i0,i1) << "!=" << rhs(i0,i1) << std::endl;
         return false;
     }
@@ -95,11 +95,11 @@ bool is_normal(const tensor2D<T>& t) {
     for (int i1 = 0; i1 < t.dims[1]; i1++) {
         float f0 = t(i0,i1);
         if (isnan2(f0)) {
-            std::cout << " found nan at (" << i0 << "," << i1 << ")" << std::endl;
+            DEBUG_LOG << " found nan at (" << i0 << "," << i1 << ")" << std::endl;
             return false;
         }
         if (isinf2(f0)) {
-            std::cout << " found inf at (" << i0 << "," << i1 << ")" << std::endl;
+            DEBUG_LOG << " found inf at (" << i0 << "," << i1 << ")" << std::endl;
             return false;
         }
     }
@@ -122,7 +122,7 @@ bool compare(const tensor2D<T>& lhs, const tensor2D<T>& rhs, float tolerance) {
         if (std::fabs(lhs(i0,i1) > 0) && diff > 0)
             max_rel_diff = std::max(max_rel_diff, rel_diff);
     }
-    std::cout << "max_abs_diff=" << max_abs_diff << " max_rel_diff=" << max_rel_diff << "\n";
+    DEBUG_LOG << "max_abs_diff=" << max_abs_diff << " max_rel_diff=" << max_rel_diff << "\n";
     return tolerance > max_abs_diff;
 }
 
@@ -150,14 +150,13 @@ std::ostream& operator<<(std::ostream& out, const tensor2D<T>& obj) {
 
 template<typename T>
 inline void show(const T * data, int rows, int cols) {
-    std::ostream& out = std::cout;
-    out << "==============\n";
+    DEBUG_LOG << "==============\n";
     for(int i0=0; i0 < rows; i0++) {
-        out << "[" << i0 << "," << 0 << "]: ";
+        DEBUG_LOG << "[" << i0 << "," << 0 << "]: ";
         for(int i1=0; i1<cols; i1++)
             //https://stackoverflow.com/questions/14644716/how-to-output-a-character-as-an-integer-through-cout/28414758#28414758
-            out << +data[i0 * cols + i1] << ",";
-        out << std::endl;
+            DEBUG_LOG << +data[i0 * cols + i1] << ",";
+        DEBUG_LOG << std::endl;
     }
 }
 

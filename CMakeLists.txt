@@ -8,6 +8,7 @@ project(root)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(CPU_EXTENSIONS_BUILD_TESTS "Build with tests" ON)
+option(CPU_EXTENSIONS_ENABLE_LOG "Enable log" OFF)
 
 message(INFO "--------------------------------")
 message(STATUS "Build with tests: ${CPU_EXTENSIONS_BUILD_TESTS}")

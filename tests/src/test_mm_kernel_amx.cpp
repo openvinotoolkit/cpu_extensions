@@ -13,6 +13,7 @@
 #include "llm_mm.hpp"
 #include "common/tensor2d.hpp"
 #include "common/tensor2d_helper.hpp"
+#include "llm_types.hpp"
 #include "test_common.hpp"
 
 using namespace std;
@@ -56,7 +57,7 @@ protected:
 
     template<typename TA, typename TB>
     void test() {
-        if (_N == 1 && (_is_transpose || _types.first == dnnl_u8)) {
+        if (_N == 1 && (_is_transpose || _types.first == llmdnn_u8)) {
             GTEST_SKIP() << "gemv does not support transpose or u8s8.";
         }
         mm_kernel* mm;
@@ -64,7 +65,7 @@ protected:
             _types.first, _types.second,
             _N == 1, _is_transpose
         };
-        ASSERT_TRUE(mm_kernel_create(&mm, &param));
+        ASSERT_TRUE(mm_kernel_create(&mm, &param) == llmdnn::status_ok);
         auto gemm = std::shared_ptr<mm_kernel>(mm, [](mm_kernel* p) { mm_kernel_destroy(p); });
 
         tensor2D<TA> A(_M, _K, true);
@@ -97,9 +98,9 @@ protected:
 };
 
 TEST_P(GemmKernelTest, Func) {
-    if (_types.first == dnnl_u8 && _types.second == dnnl_s8) {
+    if (_types.first == llmdnn_u8 && _types.second == llmdnn_s8) {
         test<uint8_t, int8_t>();
-    } else if (_types.first == dnnl_s8 && _types.second == dnnl_s8) {
+    } else if (_types.first == llmdnn_s8 && _types.second == llmdnn_s8) {
         test<int8_t, int8_t>();
     } else {
         test<ov::bfloat16, ov::bfloat16>();
@@ -107,9 +108,9 @@ TEST_P(GemmKernelTest, Func) {
 }
 
 const std::vector<std::pair<data_type_t, data_type_t>> types = {
-    { dnnl_u8, dnnl_s8 },
-    { dnnl_s8, dnnl_s8 },
-    { dnnl_bf16, dnnl_bf16 },
+    { llmdnn_u8, llmdnn_s8 },
+    { llmdnn_s8, llmdnn_s8 },
+    { llmdnn_bf16, llmdnn_bf16 },
 };
 
 // M, N, K

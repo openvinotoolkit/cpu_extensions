@@ -132,4 +132,4 @@ namespace llmdnn {
             _mm256_mask_storeu_epi16(k_dst + i, x_mask, _mm512_extracti64x4_epi64((__m512i)out, 0));
         }
     }
-}
+}  // namespace llmdnn

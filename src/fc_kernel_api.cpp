@@ -27,7 +27,7 @@ static decltype(&fc_kernel_execute) fc_kernel_execute_ptr = fc_kernel_execute_am
 static decltype(&fc_kernel_bf16w8_get_q_dq) fc_kernel_bf16w8_get_q_dq_ptr = fc_kernel_bf16w8_get_q_dq_amx;
 
 // interface
-bool fc_kernel_create(fc_kernel** mm, const fc_create_param* param) {
+status_t fc_kernel_create(fc_kernel** mm, const fc_create_param* param) {
     return fc_kernel_create_ptr(mm, param);
 }
 
@@ -44,4 +44,4 @@ void fc_kernel_bf16w8_get_q_dq(size_t K, size_t N, size_t stride, void* ptr, flo
     fc_kernel_bf16w8_get_q_dq_ptr(K, N, stride, ptr, q, dq);
 }
 
-}
+}  // namespace llmdnn

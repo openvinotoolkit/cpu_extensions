@@ -108,4 +108,4 @@ namespace llmdnn {
             dst = reinterpret_cast<D*>(reinterpret_cast<int8_t*>(dst) + dst_stride);
         }
     }
-}
+}  // namespace llmdnn

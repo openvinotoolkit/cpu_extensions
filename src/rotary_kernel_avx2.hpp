@@ -105,4 +105,4 @@ namespace llmdnn {
             _mm256_maskstore_ps(k_dst + i, x_mask, k_dst_f);
         }
     }
-}
+}  // namespace llmdnn

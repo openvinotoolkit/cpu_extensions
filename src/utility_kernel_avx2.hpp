@@ -15,20 +15,6 @@
 
 namespace llmdnn {
 
-#pragma once
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <cmath>
-
-#ifdef _WIN32
-#include <intrin.h>
-#else
-#include <x86intrin.h>
-#include <immintrin.h>
-#endif
-
 inline __m256i get_mask(int N7) {
 	static __m256i mask[] = {
 		_mm256_set_epi32( 0, 0, 0, 0, 0, 0, 0, 0),
@@ -56,4 +42,4 @@ static inline float _mm256_reduce_add_ps(__m256 x) {
     return _mm_cvtss_f32(x32);
 }
 
-}
+}  // namespace llmdnn

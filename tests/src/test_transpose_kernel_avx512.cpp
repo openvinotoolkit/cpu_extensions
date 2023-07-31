@@ -111,11 +111,11 @@ protected:
 };
 
 TEST_P(TransposeTest, memcpy2d) {
-    if (_types == dnnl_s8) {
+    if (_types == llmdnn_s8) {
         test<int8_t>(1.1f);
-    } else if (_types == dnnl_u8) {
+    } else if (_types == llmdnn_u8) {
         test<uint8_t>(1.1f);
-    } else if (_types == dnnl_f32) {
+    } else if (_types == llmdnn_f32) {
         test<float>(0.00001f);
     } else {
         test<ov::bfloat16>(0.01f);
@@ -123,7 +123,7 @@ TEST_P(TransposeTest, memcpy2d) {
 }
 
 const std::vector<data_type_t> types = {
-    dnnl_s8, dnnl_bf16, dnnl_u8, dnnl_f32
+    llmdnn_s8, llmdnn_bf16, llmdnn_u8, llmdnn_f32
 };
 
 INSTANTIATE_TEST_SUITE_P(smoke_Transpose, TransposeTest,
