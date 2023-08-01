@@ -1280,7 +1280,7 @@ namespace PP {
             q_scale_per_oc = scale_per_oc;
         }
 
-        // source buffC can be i32 or f32
+        // source buffC can be i32 or f32, buffC size is [32, 32], valid_m/valid_n is in [1, 32]
         template<typename T, typename std::enable_if<is_f32i32<T>::value, bool>::type = true>
         void operator()(tensor2D<T> & buffC, int m, int n, int valid_m, int valid_n) {
             auto * psrc = &buffC(0,0);
