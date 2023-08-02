@@ -11,7 +11,6 @@
 #include <iostream>
 #include <string>
 #include "gtest/gtest.h"
-#include "llm_mm.hpp"
 #include "common/tensor2d.hpp"
 #include "common/tensor2d_helper.hpp"
 #include "gelu_kernel_avx512.hpp"
