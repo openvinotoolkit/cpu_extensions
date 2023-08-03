@@ -1222,6 +1222,37 @@ namespace functional {
             }
         }
     }
+
+    inline void f32_to_bf16_tensor(tensor2D<ov::bfloat16>& dst, tensor2D<float>& src) {
+        dst.resize(src.dims[0], src.dims[1]);
+        auto tail = src.dims[1] % 16;
+        __mmask16 x_mask = _cvtu32_mask16(0xFFFFu >> (16 - tail));
+        for (int k = 0; k < src.dims[0]; k++) {
+            auto p_src = &src(k, 0);
+            auto p_dst = &dst(k, 0);
+            int i;
+            for(i = 0; i < src.dims[1] / 32 * 32; i += 32) {
+                auto x0 = _mm512_loadu_ps(p_src + i);
+                auto x1 = _mm512_loadu_ps(p_src + i + 16);
+                auto out = _mm512_cvtne2ps_pbh(x1, x0);
+                _mm512_storeu_epi32(reinterpret_cast<ov::bfloat16*>(p_dst) + i, (__m512i)out);
+            }
+            if (i < src.dims[1] - tail) {
+                auto x = _mm512_loadu_ps(p_src + i);
+                auto out = _mm512_cvtne2ps_pbh(x, x);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(reinterpret_cast<ov::bfloat16*>(p_dst) + i),
+                    _mm512_extracti64x4_epi64(out, 0));
+                i += 16;
+            }
+            // handle tails
+            if (tail) {
+                auto x = _mm512_maskz_loadu_ps(x_mask, p_src + i);
+                auto out = _mm512_cvtne2ps_pbh(x, x);
+                _mm256_mask_storeu_epi16(reinterpret_cast<__m256i*>(reinterpret_cast<ov::bfloat16*>(p_dst) + i),
+                    x_mask, _mm512_extracti64x4_epi64(out, 0));
+            }
+        }
+    }
 };
 
 // 2x2 tiles post process kernels

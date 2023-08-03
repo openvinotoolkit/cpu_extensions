@@ -95,7 +95,8 @@ protected:
             ptr_B = B.data;
             ldb = B.stride;
         }
-        fc_kernel_execute(gemm.get(), A.data, ptr_B, C.data, A.stride, ldb,
+        fc_kernel_pack_weight(gemm.get(), ptr_B, _N, _K, ldb, 0, _N);
+        fc_kernel_execute(gemm.get(), A.data, C.data, A.stride,
             C.stride, _M, _N, _K, 0, _N, dq.data, q.data, bias.data);
         C_Ref = 0;
         float* ptr_dq = nullptr;
@@ -148,6 +149,10 @@ TEST_P(FCKernelTest, Func) {
         do_test<ov::bfloat16, ov::bfloat16, ov::bfloat16>();
     } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_bf16 && _dt_c == llmdnn_f32) {
         do_test<ov::bfloat16, ov::bfloat16, float>();
+    } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_f32 && _dt_c == llmdnn_bf16) {
+        do_test<ov::bfloat16, float, ov::bfloat16>();
+    } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_f32 && _dt_c == llmdnn_f32) {
+        do_test<ov::bfloat16, float, float>();
     } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_f32) {
         do_test<ov::bfloat16, int8_t, float>();
     } else if (_dt_a == llmdnn_bf16 && _dt_b == llmdnn_s8 && _dt_c == llmdnn_bf16) {
@@ -163,6 +168,8 @@ TEST_P(FCKernelTest, Func) {
 //  (s8,s8,f32),dq,[bias],[gelu]
 //  (bf16,bf16,bf16),[bias],[gelu]
 //  (bf16,bf16,f32),[bias],[gelu]
+//  (bf16,f32,bf16),[bias],[gelu]
+//  (bf16,f32,f32),[bias],[gelu]
 //  (bf16,s8,f32),dq,[bias],[gelu]
 //  (bf16,s8,bf16),dq,[bias],[gelu]
 const std::vector<FCKernelTestDTPost> types = {
@@ -196,6 +203,18 @@ const std::vector<FCKernelTestDTPost> types = {
     { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, BIAS_GELU },
     { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, GELU_TANH },
     { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, BIAS_GELU_TANH },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_bf16, NONE },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_bf16, BIAS },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_bf16, GELU },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_bf16, BIAS_GELU },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_bf16, GELU_TANH },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_bf16, BIAS_GELU_TANH },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_f32, NONE },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_f32, BIAS },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_f32, GELU },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_f32, BIAS_GELU },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_f32, GELU_TANH },
+    { llmdnn_bf16, llmdnn_f32, llmdnn_f32, BIAS_GELU_TANH },
     // TODO: support weight compression
     // { llmdnn_bf16, llmdnn_s8, llmdnn_f32, DEQUANT },
     // { llmdnn_bf16, llmdnn_s8, llmdnn_f32, DEQUANT_BIAS },
