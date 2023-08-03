@@ -99,9 +99,9 @@ inline void matmul(tensor2D<float> & A,
     }
 }
 
-template<typename TA, typename TC>
+template<typename TA, typename TB, typename TC>
 void matmul(tensor2D<TA> & A,
-            tensor2D<int8_t> & B,
+            tensor2D<TB> & B,
             tensor2D<TC> & C,
             float * dq = nullptr,
             float * bias = nullptr,
