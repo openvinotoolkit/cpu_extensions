@@ -138,10 +138,8 @@ void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, size_t N, size_t K, s
             amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
         } else {
             tensor2D<float> b(b_d0, b_d1, static_cast<float*>(ptr_b), mm->stride_b);
-            tensor2D<ov::bfloat16> internalTmpB;
             auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
-            amx_kernel::functional::f32_to_bf16_tensor(internalTmpB, matB);
-            amx_kernel::repackB_1x2(internalTmpB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
         }
     } else {
         tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(ptr_b), mm->stride_b);
