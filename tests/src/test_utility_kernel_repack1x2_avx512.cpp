@@ -23,17 +23,17 @@ using ::testing::Values;
 using ::testing::ValuesIn;
 
 using RepackTestParamSet = std::tuple<
-        data_type_t                                // data type
+        std::pair<data_type_t, data_type_t>         // data type
         >;
 
 class RepackTest : public TestWithParam<RepackTestParamSet> {
 public:
     static std::string getTestCaseName(const testing::TestParamInfo<RepackTestParamSet>& obj) {
-        data_type_t types;
+        std::pair<data_type_t, data_type_t> types;
         std::tie(types) = obj.param;
 
         std::ostringstream result;
-        result << dtype_to_str(types);
+        result << "IN_" << dtype_to_str(types.first) << "_OUT_" << dtype_to_str(types.second);
         return result.str();
     }
 
@@ -84,17 +84,23 @@ protected:
         }
     }
 
-    template<typename T>
+    template<typename TI, typename TO>
     void test() {
         auto testone = [] (int k, int n, std::string prefix) {
-            tensor2D<T> A(k, n, true);
+            tensor2D<TI> A(k, n, true);
 
             fill_rnd(A);
-            tensor2D<T> AT = A.Tr(true);
-            tensor2D<T> A_out, AT_out, A_ref;
+            tensor2D<TI> AT = A.Tr(true);
+            tensor2D<TO> A_out, AT_out, A_ref;
             amx_kernel::repackB_1x2(A, false, A_out, false);
             amx_kernel::repackB_1x2(AT, true, AT_out, false);
-            gen_ref(AT, A_ref);
+            if constexpr (std::is_same_v<float, TI>) {
+                tensor2D<ov::bfloat16> AT_bf16(n, k, true);
+                amx_kernel::functional::f32_to_bf16_tensor(AT_bf16, AT);
+                gen_ref(AT_bf16, A_ref);
+            } else {
+                gen_ref(AT, A_ref);
+            }
             ASSERT_TRUE(A_out == A_ref) << " " << prefix << " without transform K: " << k << " N: " << n;
             ASSERT_TRUE(AT_out == A_ref) << " " << prefix << " with transform K: " << k << " N: " << n;
         };
@@ -127,19 +133,23 @@ protected:
         testone(64 + 16 + 3, 128 + 16 + 5, "alltail");
     }
 
-    data_type_t _types;
+    std::pair<data_type_t, data_type_t> _types;
 };
 
 TEST_P(RepackTest, Func) {
-    if (_types == llmdnn_s8) {
-        test<int8_t>();
+    if (_types.first == llmdnn_s8 && _types.second == llmdnn_s8) {
+        test<int8_t, int8_t>();
+    } else if (_types.first == llmdnn::llmdnn_bf16 && _types.second == llmdnn_bf16) {
+        test<ov::bfloat16, ov::bfloat16>();
     } else {
-        test<ov::bfloat16>();
+        test<float, ov::bfloat16>();
     }
 }
 
-const std::vector<data_type_t> types = {
-    llmdnn_s8, llmdnn_bf16
+const std::vector<std::pair<data_type_t, data_type_t>> types = {
+    {llmdnn_s8, llmdnn_s8},
+    {llmdnn_bf16, llmdnn_bf16},
+    {llmdnn_f32, llmdnn_bf16},
 };
 
 INSTANTIATE_TEST_SUITE_P(smoke_Repack, RepackTest,

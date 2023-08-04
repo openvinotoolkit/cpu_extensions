@@ -1223,7 +1223,7 @@ namespace functional {
         }
     }
 
-    inline void f32_to_bf16_tensor(tensor2D<ov::bfloat16>& dst, tensor2D<float>& src) {
+    inline void f32_to_bf16_tensor(tensor2D<ov::bfloat16>& dst, const tensor2D<float>& src) {
         dst.resize(src.dims[0], src.dims[1]);
         auto tail = src.dims[1] % 16;
         __mmask16 x_mask = _cvtu32_mask16(0xFFFFu >> (16 - tail));
@@ -1510,55 +1510,52 @@ void repackB_1x2(const tensor2D<T> &Bi, bool transpose, tensor2D<T>& Bo, bool is
         for(; n < N - n_tail; n += N_unit) {
             // a K_padded x N_unit submatrix layouted in B0/B1... and put sequentially
             auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
-            auto* src0 = reinterpret_cast<const int8_t*>(&Bi(n, 0));
             int k;
             for(k = 0; k < Kbody; k += kStep) {
                 // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
-                functional::transpose_epi32_16x16(dst, src0 + 0 * 16 * Bi.stride + k * sizeof(T), Bi.stride);
+                functional::transpose_epi32_16x16(dst, &Bi(n, k), Bi.stride);
                 dst += 1024;
-                functional::transpose_epi32_16x16(dst, src0 + 1 * 16 * Bi.stride + k * sizeof(T), Bi.stride);
+                functional::transpose_epi32_16x16(dst, &Bi(n + 16, k), Bi.stride);
                 dst += 1024;
             }
             if (Ktails) {
                 // Ktails part is loaded into A tile right-aligned, so B tile must also load
                 // Ktails part to bottom-aligned, and fill upper padding with zero
-                functional::transpose_epi32_16xN_right_align(dst, src0 + 0 * 16 * Bi.stride + k * sizeof(T), Bi.stride, (K - k)*sizeof(T));
+                functional::transpose_epi32_16xN_right_align(dst, &Bi(n, k), Bi.stride, (K - k) * sizeof(T));
                 dst += 1024;
-                functional::transpose_epi32_16xN_right_align(dst, src0 + 1 * 16 * Bi.stride + k * sizeof(T), Bi.stride, (K - k)*sizeof(T));
+                functional::transpose_epi32_16xN_right_align(dst, &Bi(n + 16, k), Bi.stride, (K - k) * sizeof(T));
                 dst += 1024;
             }
         }
         // n_tail: [16, 32)
         if (N - n >= 16) {
             auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
-            auto* src0 = reinterpret_cast<const int8_t*>(&Bi(n, 0));
             int k;
             for(k = 0; k < Kbody; k += kStep) {
                 // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
-                functional::transpose_epi32_16x16(dst, src0 + 0 * 16 * Bi.stride + k * sizeof(T), Bi.stride);
+                functional::transpose_epi32_16x16(dst, &Bi(n, k), Bi.stride);
                 dst += 1024 * 2;
             }
             if (Ktails) {
                 // Ktails part is loaded into A tile right-aligned, so B tile must also load
                 // Ktails part to bottom-aligned, and fill upper padding with zero
-                functional::transpose_epi32_16xN_right_align(dst, src0 + 0 * 16 * Bi.stride + k * sizeof(T), Bi.stride, (K - k) * sizeof(T));
+                functional::transpose_epi32_16xN_right_align(dst, &Bi(n, k), Bi.stride, (K - k) * sizeof(T));
             }
             n += 16;
         }
         // n_tail: (0, 16)
         if (N - n > 0) {
             auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0)) + (n_tail > 16 ? 1024 : 0);
-            auto* src0 = reinterpret_cast<const int8_t*>(&Bi(n, 0));
             int k;
             for(k = 0; k < Kbody; k += kStep) {
                 // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
-                functional::transpose_epi32_Mx16(dst, src0 + 0 * 16 * Bi.stride + k * sizeof(T), Bi.stride, N - n);
+                functional::transpose_epi32_Mx16(dst, &Bi(n, k), Bi.stride, N - n);
                 dst += 1024 * 2;
             }
             if (Ktails) {
                 // Ktails part is loaded into A tile right-aligned, so B tile must also load
                 // Ktails part to bottom-aligned, and fill upper padding with zero
-                functional::transpose_epi32_MxN_right_align(dst, src0 + 0 * 16 * Bi.stride + k * sizeof(T), Bi.stride, (K - k) * sizeof(T), N - n);
+                functional::transpose_epi32_MxN_right_align(dst, &Bi(n, k), Bi.stride, (K - k) * sizeof(T), N - n);
             }
             n = N;
         }
@@ -1592,6 +1589,125 @@ void repackB_1x2(const tensor2D<T> &Bi, bool transpose, tensor2D<T>& Bo, bool is
                 // int8: B0 B1 64x(16+16) => repack as two 16x16x4
                 int src_rows = std::min(K - k, kStep);
                 functional::kpack_tile_B0B1_ntail(dst, dst + 1024, &Bi(k, n), Bi.stride, src_rows, N - n);
+                dst += 2048;
+            }
+            n += 16;
+        }
+    }
+}
+
+inline void repackB_1x2(tensor2D<float> &Bi, bool transpose, tensor2D<ov::bfloat16>& Bo, bool is_const) {
+    int K = Bi.dims[transpose ? 1 : 0];
+    int N = Bi.dims[transpose ? 0 : 1];
+
+    // K_padded : round up to multiple of 32/64
+    int kStep = 64 / sizeof(ov::bfloat16);
+    int K_padded = (K + kStep - 1) / kStep * kStep;
+    int Ktails = K % kStep;
+    int Kbody = K - Ktails;
+
+    // N_padded : round up to multiple of (2*16)
+    int N_unit = 2 * 16;
+    int N_padded = (N + N_unit - 1) / N_unit * N_unit;
+
+    // Bo(ni, 0) is a vector flattened from a slice of shape [K_padded x N_unit]
+    Bo.resize(N_padded / N_unit, K_padded * N_unit, false, is_const);
+
+    int n = 0;
+    int n_tail = N % N_unit;
+    if (transpose) {
+        tensor2D<ov::bfloat16> Btmp(16, 32);
+        for(; n < N - n_tail; n += N_unit) {
+            // a K_padded x N_unit submatrix layouted in B0/B1... and put sequentially
+            auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
+            int k;
+            for(k = 0; k < Kbody; k += kStep) {
+                // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(16, 32, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16x16(dst, &Btmp(0, 0), Btmp.stride);
+                dst += 1024;
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(16, 32, &Bi(n + 16, k), Bi.stride));
+                functional::transpose_epi32_16x16(dst, &Btmp(0, 0), Btmp.stride);
+                dst += 1024;
+            }
+            if (Ktails) {
+                // Ktails part is loaded into A tile right-aligned, so B tile must also load
+                // Ktails part to bottom-aligned, and fill upper padding with zero
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(16, K - k, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16xN_right_align(dst, &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16));
+                dst += 1024;
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(16, K - k, &Bi(n + 16, k), Bi.stride));
+                functional::transpose_epi32_16xN_right_align(dst, &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16));
+                dst += 1024;
+            }
+        }
+        // n_tail: [16, 32)
+        if (N - n >= 16) {
+            auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
+            int k;
+            for(k = 0; k < Kbody; k += kStep) {
+                // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(16, 32, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16x16(dst, &Btmp(0, 0), Btmp.stride);
+                dst += 1024 * 2;
+            }
+            if (Ktails) {
+                // Ktails part is loaded into A tile right-aligned, so B tile must also load
+                // Ktails part to bottom-aligned, and fill upper padding with zero
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(16, K - k, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16xN_right_align(dst, &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16));
+            }
+            n += 16;
+        }
+        // n_tail: (0, 16)
+        if (N - n > 0) {
+            auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0)) + (n_tail > 16 ? 1024 : 0);
+            int k;
+            for(k = 0; k < Kbody; k += kStep) {
+                // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(N - n, 32, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_Mx16(dst, &Btmp(0, 0), Btmp.stride, N - n);
+                dst += 1024 * 2;
+            }
+            if (Ktails) {
+                // Ktails part is loaded into A tile right-aligned, so B tile must also load
+                // Ktails part to bottom-aligned, and fill upper padding with zero
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(N - n, K - k, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_MxN_right_align(dst, &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16), N - n);
+            }
+            n = N;
+        }
+        // second B tile is untouched, need to set to zero 
+        if (n_tail > 0 && n_tail <= 16) {
+            auto* dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
+            for (int k = 0; k < K_padded; k += kStep) {
+                memset(dst + 1024, 0, 1024);
+                dst += 1024 * 2;
+            }
+        }
+    } else {
+        // pack & layout sequentially
+        int n = 0;
+        int n_tail = N % N_unit;
+        tensor2D<ov::bfloat16> Btmp(32, 32);
+        for(; n < N - n_tail; n += N_unit) {
+            auto * dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
+            for(int k = 0; k < K; k += kStep) {
+                // bf16: B0 B1 32x(16+16) => repack as two 16x16x2
+                int src_rows = std::min(K - k, kStep);
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(src_rows, 32, &Bi(k, n), Bi.stride));
+                functional::kpack_tile_B0B1(dst, dst + 1024, &Btmp(0, 0), Btmp.stride, src_rows);
+                dst += 2048;
+            }
+        }
+        // n_tail: (0, 32)
+        if (N - n > 0) {
+            auto * dst = reinterpret_cast<int8_t*>(&Bo(n / N_unit, 0));
+            for(int k = 0; k < K; k += kStep) {
+                // bf16: B0 B1 32x(16+16) => repack as two 16x16x2
+                int src_rows = std::min(K - k, kStep);
+                functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(src_rows, N - n, &Bi(k, n), Bi.stride));
+                functional::kpack_tile_B0B1_ntail(dst, dst + 1024, &Btmp(0, 0), Btmp.stride, src_rows, N - n);
                 dst += 2048;
             }
             n += 16;
