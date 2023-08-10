@@ -1963,13 +1963,9 @@ struct Matmul {
     // but only different K(32 vs 64) in A,C & B tiles
     constexpr static int kStep = is_i8_mode ? 64 : 32;
 
-    // 2x2 C tiles buffer
-    // most usecase requires post-processing with AVX, thus buffC
-    // is used to transfer data to AVX register
-    tensor2D<TC> buffC;
 
     Matmul(bool constB = false, bool transposeB = false) : 
-        constB(constB), transposeB(transposeB), buffC(32, 32) {}
+        constB(constB), transposeB(transposeB) {}
 
     // ppkernel is a callable which captures the runtime args
     // by itself, so no need to pass in any post-process related
@@ -2086,6 +2082,12 @@ struct Matmul {
                     bool skip_repack = false) {
         int M = matA.dims[0];
         int K = matA.dims[1];
+        // 2x2 C tiles buffer
+        // most usecase requires post-processing with AVX, thus buffC
+        // is used to transfer data to AVX register
+        alignas(64) TC buff[32 * 32];
+        tensor2D<TC> buffC(32, 32, buff, 32 * sizeof(TC));
+
         if (K < kStep) {
             int B0, B1;
             if (transposeB) {
