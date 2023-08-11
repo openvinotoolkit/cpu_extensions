@@ -9,9 +9,7 @@
 #include <iostream>
 #include <functional>
 #include <assert.h>
-#ifdef ENABLE_NUMA
-#include "numa.h"
-#endif
+#include "memory_alloc.hpp"
 #include "log.hpp"
 #include "bf16.hpp"
 
@@ -30,7 +28,7 @@ struct tensor2D {
     tensor2D() = default;
     tensor2D(const tensor2D&) = delete;
     ~tensor2D() {
-        if (own && data) ::free(data);
+        if (own && data) llmdnn_free(data, capacity);
     }
 
     operator bool() {
@@ -104,22 +102,11 @@ struct tensor2D {
         if (capacity < need_capacity) {
             if (!is_const)
                 need_capacity *= 2;
-            capacity = need_capacity;
             // align begin address to cache line is vital, so tile load can
             // use all bandwidth (L1D/L2 only deliver data in unit of 64-byte aligned cache-line)
-
-#ifdef ENABLE_NUMA
-            if (USE_NUMA) {
-                data = std::shared_ptr<T>(
-                            reinterpret_cast<T*>(numa_alloc_local(capacity)),
-                            [need_capacity](void * p){ numa_free(p, need_capacity); });
-            } else {
-#else
-            {
-#endif
-                if (data) ::free(data);
-                data = reinterpret_cast<T*>(aligned_alloc(64, capacity));
-            }
+            if (data) llmdnn_free(data, capacity);
+            data = reinterpret_cast<T*>(llmdnn_alloc(64, need_capacity));
+            capacity = need_capacity;
             if (is_const)
                 memset(static_cast<void*>(data), 0, need_capacity);
             if (reinterpret_cast<uintptr_t>(data) % 64)

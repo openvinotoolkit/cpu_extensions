@@ -16,10 +16,6 @@
 #include <x86intrin.h>
 #endif
 
-#ifdef ENABLE_NUMA
-#include "numa.h"
-#endif
-
 using namespace llmdnn;
 
 namespace amx_kernel {
