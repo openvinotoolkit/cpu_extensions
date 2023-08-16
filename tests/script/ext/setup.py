@@ -42,6 +42,7 @@ setup(name='llmdnn',
           library_dirs=[f'{sys.prefix}/lib',
                         cpu_extensions_lib_dir],
           libraries=['cpu_extensions',
+                     'numa',
                      'stdc++']),
       ],
       cmdclass={'build_ext': cpp_extension.BuildExtension}

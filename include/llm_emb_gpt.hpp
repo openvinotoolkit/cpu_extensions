@@ -12,9 +12,12 @@
 
 namespace llmdnn {
 
-status_t emb_gpt(const tensor& q_src,              // q shape: [batch, query_seq_len, head_num, head_size]
-                 const tensor& k_src,              // k shape: [batch, query_seq_len, head_num, head_size]
-                 const tensor& v_src,              // v shape: [batch, query_seq_len, head_num, head_size]
+status_t emb_gpt(const tensor& q_src,              // q shape: [batch, query_seq_len, head_num, head_size] or
+                                                   //          [batch, query_seq_len, num_kv_heads, head_num/num_kv_heads, head_size]
+                 const tensor& k_src,              // k shape: [batch, query_seq_len, head_num, head_size] or
+                                                   //          [batch, query_seq_len, num_kv_heads, 1, head_size]
+                 const tensor& v_src,              // v shape: [batch, query_seq_len, head_num, head_size] or
+                                                   //          [batch, query_seq_len, num_kv_heads, 1, head_size]
                  const tensor& k_past,             // k_past shape: [batch, num_heads, past_seq_len, head_size]
                  const tensor& v_past,             // v_past shape: [batch, num_heads, past_seq_len, head_size]
                  const tensor& q_dst,              // q_dst, shape: [batch, num_heads, query_seq_len, head_size]

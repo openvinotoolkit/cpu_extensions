@@ -5,6 +5,7 @@ prepare python enviroment
 ```
 python3 -m venv .env
 source .env/bin/activate
+sudo apt install libnuma-dev
 pip3 install -r requirements.txt
 ```
 
