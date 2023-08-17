@@ -36,8 +36,8 @@ void fc_kernel_destroy(fc_kernel* mm) {
     fc_kernel_destroy_ptr(mm);
 }
 
-void fc_kernel_pack_weight(fc_kernel* mm, void* ptr_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end) {
-    fc_kernel_pack_weight_ptr(mm, ptr_b, N, K, stride_b, n_start, n_end);
+void fc_kernel_pack_weight(fc_kernel* mm, void* ptr_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end) {
+    fc_kernel_pack_weight_ptr(mm, ptr_b, dt_b, N, K, stride_b, n_start, n_end);
 }
 
 void fc_kernel_execute(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t stride_a, size_t stride_c,

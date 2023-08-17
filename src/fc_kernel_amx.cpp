@@ -40,8 +40,6 @@ static bool check_valid_postops(size_t value, data_type_t dt_a, data_type_t dt_b
         { { llmdnn_s8, llmdnn_s8, llmdnn_s8 }, { DEQUANT | QUANT, BIAS | GELU | GELU_TANH } },
         { { llmdnn_s8, llmdnn_s8, llmdnn_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
         { { llmdnn_s8, llmdnn_s8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-        { { llmdnn_bf16, llmdnn_f32, llmdnn_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
-        { { llmdnn_bf16, llmdnn_f32, llmdnn_f32 }, { 0, BIAS | GELU | GELU_TANH } },
         { { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
         { { llmdnn_bf16, llmdnn_bf16, llmdnn_f32 }, { 0, BIAS | GELU | GELU_TANH } },
         { { llmdnn_bf16, llmdnn_s8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
@@ -116,7 +114,7 @@ void fc_kernel_destroy_amx(fc_kernel* mm) {
     }
 }
 
-void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end) {
+void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end) {
     mm->stride_b = stride_b;
     size_t b_d0 = K, b_d1 = N;
     if (mm->b_is_transpose) {
@@ -132,7 +130,7 @@ void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, size_t N, size_t K, s
         auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
         amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->u8xi8->internalB, true);
     } else if (mm->bf16xbf16) {
-        if (mm->dt_b == llmdnn_bf16) {
+        if (dt_b == llmdnn_bf16) {
             tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(ptr_b), mm->stride_b);
             auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
             amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
@@ -142,13 +140,22 @@ void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, size_t N, size_t K, s
             amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
         }
     } else {
-        tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(ptr_b), mm->stride_b);
-        auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
         tensor2D<ov::bfloat16> internalTmpB;
-        amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
+        if (dt_b == llmdnn_bf16) {
+            tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(ptr_b), mm->stride_b);
+            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
+        } else {
+            tensor2D<float> b(b_d0, b_d1, static_cast<float*>(ptr_b), mm->stride_b);
+            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
+        }
+        if (mm->bf16xi8->dequant_scale_B == 0) {
+            fc_kernel_bf16w8_get_q_dq_amx(internalTmpB.dims[0], internalTmpB.dims[1], internalTmpB.stride, internalTmpB.data,
+                &mm->bf16xi8->quant_scale_B, &mm->bf16xi8->dequant_scale_B);
+        }
         amx_kernel::functional::bf16_to_i8_tensor(mm->bf16xi8->internalBI8, internalTmpB, mm->bf16xi8->quant_scale_B);
     }
-
 }
 
 void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t stride_a, size_t stride_c,
@@ -325,7 +332,7 @@ void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t strid
         }
     } else {
         tensor2D<bfloat16> a(M, K, reinterpret_cast<bfloat16*>(ptr_a), stride_a);
-        tensor2D<bfloat16> b(N, K, nullptr, mm->stride_b);
+        tensor2D<bfloat16> b(b_d0, b_d1, nullptr, mm->stride_b);
 
         if (mm->dt_c == llmdnn_bf16) {
             tensor2D<bfloat16> c(M, N, reinterpret_cast<bfloat16*>(ptr_c), stride_c);
