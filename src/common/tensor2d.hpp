@@ -23,12 +23,13 @@ struct tensor2D {
     int stride = 0;
     bool force_compact = false;
     bool own = false;
+    bool use_numa_alloc = false;
     int padded_dim1 = 0;
 
     tensor2D() = default;
     tensor2D(const tensor2D&) = delete;
     ~tensor2D() {
-        if (own && data) llmdnn_free(data, capacity);
+        if (own && data) llmdnn_free(data, capacity, use_numa_alloc);
     }
 
     operator bool() {
@@ -50,8 +51,8 @@ struct tensor2D {
         padded_dim1 = stride / sizeof(T);
     }
 
-    tensor2D<T> Tr(bool _force_compact = false) {
-        tensor2D<T> ret(dims[1], dims[0], _force_compact);
+    tensor2D Tr(bool _force_compact = false) {
+        tensor2D ret(dims[1], dims[0], _force_compact);
         for(int c0=0; c0 < dims[0]; ++c0) {
             for(int c1=0; c1 < dims[1]; ++c1) {
                 ret(c1, c0) = (*this)(c0, c1);
@@ -59,8 +60,8 @@ struct tensor2D {
         }
         return ret;
     }
-    tensor2D<T> clone() {
-        tensor2D<T> ret;
+    tensor2D clone() {
+        tensor2D ret;
         ret.resize(dims[0], dims[1], force_compact);
         if (ret.stride == stride) {
             memcpy(ret.data, data, dims[0] * stride);
@@ -71,8 +72,8 @@ struct tensor2D {
         }
         return ret;
     }
-    tensor2D<T> clone_with_padzero(int dim0, int dim1) {
-        tensor2D<T> ret;
+    tensor2D clone_with_padzero(int dim0, int dim1) {
+        tensor2D ret;
         ret.resize(dim0, dim1, force_compact);
         assert(dim0 >= dims[0] && dim1 >= dims[1]);
         for(int i = 0; i < dims[0]; i++) {
@@ -85,7 +86,18 @@ struct tensor2D {
 
         return ret;
     }
-    void resize(int d0, int d1, bool _force_compact = false, bool is_const=false) {
+    void copyto_with_padzero(tensor2D& dst, int dim0, int dim1) {
+        dst.resize(dim0, dim1, force_compact);
+        assert(dim0 >= dims[0] && dim1 >= dims[1]);
+        for(int i = 0; i < dims[0]; i++) {
+            memcpy(&dst(i, 0), &(*this)(i, 0), dims[1] * sizeof(T));
+            memset(reinterpret_cast<void*>(&dst(i, 0) + dims[1]), 0, dst.stride - dims[1] * sizeof(T));
+        }
+        if (dims[1] == dim1) {
+            memset(reinterpret_cast<void*>(dst.data + dims[0] * dst.padded_dim1), 0, (dim0 - dims[0]) * dst.stride);
+        }
+    }
+    void resize(int d0, int d1, bool _force_compact = false, bool is_const = false) {
         own = true;
         force_compact = _force_compact;
         dims[0] = d0;
@@ -104,8 +116,9 @@ struct tensor2D {
                 need_capacity *= 2;
             // align begin address to cache line is vital, so tile load can
             // use all bandwidth (L1D/L2 only deliver data in unit of 64-byte aligned cache-line)
-            if (data) llmdnn_free(data, capacity);
-            data = reinterpret_cast<T*>(llmdnn_alloc(64, need_capacity));
+            if (data) llmdnn_free(data, capacity, use_numa_alloc);
+            use_numa_alloc = is_const;
+            data = reinterpret_cast<T*>(llmdnn_alloc(64, need_capacity, use_numa_alloc));
             capacity = need_capacity;
             if (is_const)
                 memset(static_cast<void*>(data), 0, need_capacity);
@@ -144,13 +157,13 @@ struct tensor2D {
             (*this)[k] = v;
     }
 
-    tensor2D<T>& operator=(const tensor2D<T> & t2) = delete;
+    tensor2D& operator=(const tensor2D& t2) = delete;
 
     // move semantics
-    tensor2D(tensor2D<T> && t2) {
+    tensor2D(tensor2D && t2) {
         dims[0] = t2.dims[0];
         dims[1] = t2.dims[1];
-        if (own && data) ::free(data);
+        if (own && data) llmdnn_free(data, capacity, use_numa_alloc);
         data = t2.data;
         own = t2.own;
         capacity = t2.capacity;
@@ -161,10 +174,10 @@ struct tensor2D {
         t2.data = nullptr;
     }
 
-    tensor2D<T>&  operator=(tensor2D<T> && t2) {
+    tensor2D& operator=(tensor2D && t2) {
         dims[0] = t2.dims[0];
         dims[1] = t2.dims[1];
-        if (own && data) ::free(data);
+        if (own && data) llmdnn_free(data, capacity, use_numa_alloc);
         own = t2.own;
         data = t2.data;
         capacity = t2.capacity;

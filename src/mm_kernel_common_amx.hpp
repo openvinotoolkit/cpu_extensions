@@ -1943,6 +1943,8 @@ struct Matmul {
     // B matrix is orgnized as tensor2D of shape axb where a=round_up_div(N, 32), b=round_up(K,32/64)*32
     // so b is size of submatrix of Kx32 composed of two columns of B0/B1 tiles.
     tensor2D<TB> internalB;
+    tensor2D<TA> A_PaddedK; // pad to 32(bf16)/64(int8) buffer
+    tensor2D<TB> B_PaddedK; // pad to 32(bf16)/64(int8) buffer
 
     bool constB;
     bool transposeB;
@@ -2084,6 +2086,8 @@ struct Matmul {
         alignas(64) TC buff[32 * 32];
         tensor2D<TC> buffC(32, 32, buff, 32 * sizeof(TC));
 
+        tensor2D<TA>* pA = &matA;
+        tensor2D<TB>* pB = &_matB;
         if (K < kStep) {
             int B0, B1;
             if (transposeB) {
@@ -2093,11 +2097,13 @@ struct Matmul {
                 B0 = kStep;
                 B1 = _matB.dims[1];
             }
-            matA = matA.clone_with_padzero(M, kStep);
-            _matB = _matB.clone_with_padzero(B0, B1);
+            matA.copyto_with_padzero(A_PaddedK, M, kStep);
+            pA = &A_PaddedK;
+            _matB.copyto_with_padzero(B_PaddedK, B0, B1);
+            pB = &B_PaddedK;
             K = kStep;
         }
-        auto matB = getSubMatB(_matB, n0, n1, transposeB);
+        auto matB = getSubMatB(*pB, n0, n1, transposeB);
         int N = matB.dims[transposeB ? 0 : 1];
         assert(K == matB.dims[transposeB ? 1 : 0]);
         // Due to the fact that we load a full tile at tails of K dimension
@@ -2125,12 +2131,12 @@ struct Matmul {
             auto * pB0 = reinterpret_cast<int8_t*>(&internalB[0]);
             tileconfig_t tfg(1, 0, 8, 16, 64);
             switch((K + kStep - 1)/kStep) {
-                case 1: kernel_slimB<1>(M, N, K, n0, matA, pB0, buffC, ppkernel); break;
-                case 2: kernel_slimB<2>(M, N, K, n0, matA, pB0, buffC, ppkernel); break;
-                case 3: kernel_slimB<3>(M, N, K, n0, matA, pB0, buffC, ppkernel); break;
-                case 4: kernel_slimB<4>(M, N, K, n0, matA, pB0, buffC, ppkernel); break;
-                case 5: kernel_slimB<5>(M, N, K, n0, matA, pB0, buffC, ppkernel); break;
-                case 6: kernel_slimB<6>(M, N, K, n0, matA, pB0, buffC, ppkernel); break;
+                case 1: kernel_slimB<1>(M, N, K, n0, *pA, pB0, buffC, ppkernel); break;
+                case 2: kernel_slimB<2>(M, N, K, n0, *pA, pB0, buffC, ppkernel); break;
+                case 3: kernel_slimB<3>(M, N, K, n0, *pA, pB0, buffC, ppkernel); break;
+                case 4: kernel_slimB<4>(M, N, K, n0, *pA, pB0, buffC, ppkernel); break;
+                case 5: kernel_slimB<5>(M, N, K, n0, *pA, pB0, buffC, ppkernel); break;
+                case 6: kernel_slimB<6>(M, N, K, n0, *pA, pB0, buffC, ppkernel); break;
                 default:
                     assert(false); // impossible since (K <= 6*kStep)
             }
@@ -2146,11 +2152,11 @@ struct Matmul {
             auto * pB0 = reinterpret_cast<int8_t*>(&internalB[0]);
             auto * const pC0 = &buffC[0];
             int k;
-            const auto strideA = matA.stride;
+            const auto strideA = (*pA).stride;
             loop2D_no_bM<32>(M, N, [&](int m, int n, int valid_m, int valid_n) {
                 _tile_zero(0);
                 _tile_zero(1);
-                int8_t * pA0 = reinterpret_cast<int8_t*>(&matA[0]);
+                int8_t * pA0 = reinterpret_cast<int8_t*>(&(*pA)[0]);
                 for(k=0; k<Kbody; k+=kStep) {
                     _tile_loadd(2, pA0, strideA); pA0 += 64;  // tile A Mx32/Mx64, cols is always 64
                     // prefetch_bytes(1024, _MM_HINT_T1, 4096*48, pB0);
@@ -2178,9 +2184,9 @@ struct Matmul {
         }
 
         auto kernel_2x2 = [&](int m, int n, int valid_m, int valid_n) {
-            auto * pA0 = reinterpret_cast<int8_t*>(&matA(m, 0));
-            auto * pA1 = reinterpret_cast<int8_t*>(&matA(m + 16, 0));
-            auto strideA = matA.stride;
+            auto * pA0 = reinterpret_cast<int8_t*>(&(*pA)(m, 0));
+            auto * pA1 = reinterpret_cast<int8_t*>(&(*pA)(m + 16, 0));
+            auto strideA = (*pA).stride;
             auto * pB = reinterpret_cast<int8_t*>(&internalB(n>>5, 0));
             _tile_zero(0);
             _tile_zero(1);
