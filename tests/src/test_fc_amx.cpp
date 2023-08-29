@@ -13,6 +13,8 @@
 #include "llm_fc.hpp"
 #include "common/tensor2d.hpp"
 #include "common/tensor2d_helper.hpp"
+#include "llm_tensor.hpp"
+#include "llm_types.hpp"
 #include "test_common.hpp"
 
 using namespace std;
@@ -21,26 +23,26 @@ using ::testing::TestWithParam;
 using ::testing::Values;
 using ::testing::ValuesIn;
 
-using FCKernelTestShape = std::tuple<size_t, size_t, size_t>;
-using FCKernelTestDTPost = std::tuple<data_type_t,      // dt_a
-                                      data_type_t,      // dt_b
-                                      data_type_t,      // dt_c
-                                      data_type_t,      // type of pack weight
-                                      postops_types>;
-using FCKernelTestParamSet = std::tuple<
-        FCKernelTestDTPost,                          // a, b, c data type, postops
-        bool,                                        // b needs transpose
-        FCKernelTestShape                            // M, N, K
+using FCTestShape = std::tuple<size_t, size_t, size_t>;
+using FCTestDTPost = std::tuple<data_type_t,      // dt_a
+                                data_type_t,      // dt_b
+                                data_type_t,      // dt_c
+                                data_type_t,      // type of pack weight
+                                postops_types>;
+using FCTestParamSet = std::tuple<
+        FCTestDTPost,                          // a, b, c data type, postops
+        bool,                                  // b needs transpose
+        FCTestShape                            // M, N, K
         >;
 
-class FCKernelTest : public TestWithParam<FCKernelTestParamSet> {
+class FCTest : public TestWithParam<FCTestParamSet> {
 public:
-    static std::string getTestCaseName(const testing::TestParamInfo<FCKernelTestParamSet>& obj) {
-        FCKernelTestDTPost types;
+    static std::string getTestCaseName(const testing::TestParamInfo<FCTestParamSet>& obj) {
+        FCTestDTPost types;
         bool is_transpose;
         postops_types postops_type;
         data_type_t dt_a, dt_b, dt_c, dt_weight;
-        FCKernelTestShape shape;
+        FCTestShape shape;
         int M, N, K;
         std::tie(types, is_transpose, shape) = obj.param;
         std::tie(M, N, K) = shape;
@@ -58,8 +60,8 @@ protected:
     virtual void SetUp() override {
         initXTILE();
 
-        FCKernelTestShape shape;
-        FCKernelTestDTPost types;
+        FCTestShape shape;
+        FCTestDTPost types;
         std::tie(types, _is_transpose, shape) = GetParam();
         std::tie(_M, _N, _K) = shape;
         std::tie(_dt_a, _dt_b, _dt_c, _dt_weight, _postops_type) = types;
@@ -67,13 +69,12 @@ protected:
 
     template<typename TA, typename TB, typename TC>
     void do_test() {
-        fc_kernel* fc;
         fc_create_param param = {
             _dt_a, _dt_b, _dt_c,
             _is_transpose, _postops_type
         };
-        ASSERT_TRUE(fc_kernel_create(&fc, &param) == llmdnn::status_ok);
-        auto gemm = std::shared_ptr<fc_kernel>(fc, [](fc_kernel* p) { fc_kernel_destroy(p); });
+        llmdnn::fc fc;
+        ASSERT_TRUE(fc.init(param));
 
         tensor2D<TA> A(_M, _K, true);
         tensor2D<TB> B(_K, _N, true);
@@ -90,19 +91,27 @@ protected:
         fill_rnd(bias);
         bias = 1;
 
-        tensor2D<TB> BT = B.Tr();
+        tensor2D<TB> BT = B.Tr(true);
         TB* ptr_B;
         size_t ldb;
+        tensor weight;
         if (_is_transpose) {
             ptr_B = BT.data;
             ldb = BT.stride;
+            weight.resize({ static_cast<size_t>(BT.dims[0]), static_cast<size_t>(BT.dims[1]) }, static_cast<TB*>(ptr_B));
         } else {
             ptr_B = B.data;
             ldb = B.stride;
+            weight.resize({ static_cast<size_t>(B.dims[0]), static_cast<size_t>(B.dims[1]) }, static_cast<TB*>(ptr_B));
         }
-        fc_kernel_pack_weight(gemm.get(), ptr_B, _dt_weight, _N, _K, ldb, 0, _N);
-        fc_kernel_execute(gemm.get(), A.data, nullptr, C.data, A.stride,
-            C.stride, _M, _N, _K, 0, _N, dq.data, q.data, bias.data);
+        fc.pack_weight(weight);
+        tensor input, output, bias_t, q_t, dq_t;
+        input.resize({ static_cast<size_t>(A.dims[0]), static_cast<size_t>(A.dims[1]) }, static_cast<TA*>(A.data));
+        output.resize({ static_cast<size_t>(C.dims[0]), static_cast<size_t>(C.dims[1]) }, static_cast<TC*>(C.data));
+        dq_t.resize({ static_cast<size_t>(dq.dims[0]), static_cast<size_t>(dq.dims[1]) }, dq.data);
+        q_t.resize({ static_cast<size_t>(q.dims[0]), static_cast<size_t>(q.dims[1]) }, q.data);
+        bias_t.resize({ static_cast<size_t>(bias.dims[0]), static_cast<size_t>(bias.dims[1]) }, bias.data);
+        ASSERT_TRUE(fc.exec(input, output, dq_t, q_t, bias_t) == llmdnn::status_ok);
         C_Ref = 0;
         float* ptr_dq = nullptr;
         float* ptr_q = nullptr;
@@ -143,7 +152,7 @@ protected:
     data_type_t _dt_a, _dt_b, _dt_c, _dt_weight;
 };
 
-TEST_P(FCKernelTest, Func) {
+TEST_P(FCTest, Func) {
     if (_dt_a == llmdnn_s8 && _dt_weight == llmdnn_s8 && _dt_c == llmdnn_s8) {
         do_test<int8_t, int8_t, int8_t>();
     } else if (_dt_a == llmdnn_s8 && _dt_weight == llmdnn_s8 && _dt_c == llmdnn_bf16) {
@@ -171,7 +180,7 @@ TEST_P(FCKernelTest, Func) {
 //  (bf16,bf16,f32),[bias],[gelu]
 //  (bf16,s8,f32),dq,[bias],[gelu]
 //  (bf16,s8,bf16),dq,[bias],[gelu]
-const std::vector<FCKernelTestDTPost> types = {
+const std::vector<FCTestDTPost> types = {
     { llmdnn_s8, llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_QUANT },
     { llmdnn_s8, llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_BIAS_QUANT },
     { llmdnn_s8, llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_GELU_QUANT },
@@ -234,9 +243,9 @@ const std::vector<FCKernelTestDTPost> types = {
 };
 
 // M, N, K
-const std::vector<FCKernelTestShape> shapes = {
+const std::vector<FCTestShape> shapes = {
     // normal
-    {256, 48, 448},
+    {256, 128, 448},
     // k tail
     {256, 48, 449},
     // M tail == unroll 8
@@ -251,8 +260,8 @@ const std::vector<FCKernelTestShape> shapes = {
     {256, 1, 80},
 };
 
-INSTANTIATE_TEST_SUITE_P(smoke_FCKernel, FCKernelTest,
+INSTANTIATE_TEST_SUITE_P(smoke_FC, FCTest,
     ::testing::Combine(ValuesIn(types),
                        Values(true, false),
                        ValuesIn(shapes)),
-    FCKernelTest::getTestCaseName);
+    FCTest::getTestCaseName);

@@ -98,7 +98,6 @@ struct tensor2D {
         }
     }
     void resize(int d0, int d1, bool _force_compact = false, bool is_const = false) {
-        own = true;
         force_compact = _force_compact;
         dims[0] = d0;
         dims[1] = d1;
@@ -112,6 +111,7 @@ struct tensor2D {
         // resize method never shrink capacity, and extra T is added to put nan as test
         auto need_capacity = dims[0] * stride + 4096;
         if (capacity < need_capacity) {
+            own = true;
             if (!is_const)
                 need_capacity *= 2;
             // align begin address to cache line is vital, so tile load can

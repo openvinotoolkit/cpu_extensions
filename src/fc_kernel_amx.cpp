@@ -1,6 +1,8 @@
 // Copyright (C) 2018-2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <climits>
+#include <cstdint>
 #include <memory>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,7 +160,60 @@ void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, data_type_t dt_b, siz
     }
 }
 
-void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t stride_a, size_t stride_c,
+void fc_kernel_pack_weight_to_dst_amx(fc_kernel* mm, void* src_b, void* dst_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end) {
+    mm->stride_b = stride_b;
+    size_t b_d0 = K, b_d1 = N;
+    if (mm->b_is_transpose) {
+        b_d0 = N;
+        b_d1 = K;
+    }
+    if (mm->i8xi8) {
+        tensor2D<int8_t> b(b_d0, b_d1, static_cast<int8_t*>(src_b), mm->stride_b);
+        // do not care about the real dimension, only ensure .capacity big enough
+        mm->i8xi8->internalB = tensor2D<int8_t>(1, 1, static_cast<int8_t*>(dst_b), 1);
+        mm->i8xi8->internalB.capacity = INT_MAX;
+        auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+        amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->i8xi8->internalB, true);
+    } else if (mm->u8xi8) {
+        tensor2D<int8_t> b(b_d0, b_d1, static_cast<int8_t*>(src_b), mm->stride_b);
+        mm->u8xi8->internalB = tensor2D<int8_t>(1, 1, static_cast<int8_t*>(dst_b), 1);
+        mm->u8xi8->internalB.capacity = INT_MAX;
+        auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+        amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->u8xi8->internalB, true);
+    } else if (mm->bf16xbf16) {
+        mm->bf16xbf16->internalB = tensor2D<bfloat16>(1, 1, static_cast<bfloat16*>(dst_b), 1);
+        mm->bf16xbf16->internalB.capacity = INT_MAX;
+        if (dt_b == llmdnn_bf16) {
+            tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(src_b), mm->stride_b);
+            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
+        } else {
+            tensor2D<float> b(b_d0, b_d1, static_cast<float*>(src_b), mm->stride_b);
+            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
+        }
+    } else {
+        tensor2D<ov::bfloat16> internalTmpB;
+        mm->bf16xi8->internalBI8 = tensor2D<int8_t>(1, 1, static_cast<int8_t*>(dst_b), 1);
+        mm->bf16xi8->internalBI8.capacity = INT_MAX;
+        if (dt_b == llmdnn_bf16) {
+            tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(src_b), mm->stride_b);
+            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
+        } else {
+            tensor2D<float> b(b_d0, b_d1, static_cast<float*>(src_b), mm->stride_b);
+            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
+        }
+        if (mm->bf16xi8->dequant_scale_B == 0) {
+            fc_kernel_bf16w8_get_q_dq_amx(internalTmpB.dims[0], internalTmpB.dims[1], internalTmpB.stride, internalTmpB.data,
+                &mm->bf16xi8->quant_scale_B, &mm->bf16xi8->dequant_scale_B);
+        }
+        amx_kernel::functional::bf16_to_i8_tensor(mm->bf16xi8->internalBI8, internalTmpB, mm->bf16xi8->quant_scale_B);
+    }
+}
+
+void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_b, void* ptr_c, size_t stride_a, size_t stride_c,
         size_t M, size_t N, size_t K, size_t n_start, size_t n_end, float* dq, float* q, float* bias) {
     size_t b_d0 = K, b_d1 = N;
     if (mm->b_is_transpose) {
@@ -168,6 +223,10 @@ void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t strid
     if (mm->i8xi8) {
         tensor2D<int8_t> a(M, K, reinterpret_cast<int8_t*>(ptr_a), stride_a);
         tensor2D<int8_t> b(b_d0, b_d1, nullptr, mm->stride_b);
+        if (ptr_b) {
+            auto K_padded = rndup(K, 64);
+            mm->i8xi8->internalB = tensor2D<int8_t>(N / 32, 32 * K_padded, static_cast<int8_t*>(ptr_b), 32 * K_padded);
+        }
 
         if (mm->dt_c == llmdnn_s8) {
             tensor2D<int8_t> c(M, N, reinterpret_cast<int8_t*>(ptr_c), stride_c);
@@ -278,7 +337,10 @@ void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t strid
     } else if (mm->bf16xbf16) {
         tensor2D<bfloat16> a(M, K, reinterpret_cast<bfloat16*>(ptr_a), stride_a);
         tensor2D<bfloat16> b(b_d0, b_d1, nullptr, mm->stride_b);
-
+        if (ptr_b) {
+            auto K_padded = rndup(K, 32);
+            mm->bf16xbf16->internalB = tensor2D<bfloat16>(N / 32, 32 * K_padded, static_cast<bfloat16*>(ptr_b), 32 * K_padded * sizeof(bfloat16));
+        }
         if (mm->dt_c == llmdnn_bf16) {
             tensor2D<bfloat16> c(M, N, reinterpret_cast<bfloat16*>(ptr_c), stride_c);
             if (!(mm->postops_type & BIAS)) {
@@ -333,6 +395,11 @@ void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_c, size_t strid
     } else {
         tensor2D<bfloat16> a(M, K, reinterpret_cast<bfloat16*>(ptr_a), stride_a);
         tensor2D<bfloat16> b(b_d0, b_d1, nullptr, mm->stride_b);
+
+        if (ptr_b) {
+            auto K_padded = rndup(K, 64);
+            mm->bf16xi8->internalBI8 = tensor2D<int8_t>(N / 32, 32 * K_padded, static_cast<int8_t*>(ptr_b), 32 * K_padded);
+        }
 
         if (mm->dt_c == llmdnn_bf16) {
             tensor2D<bfloat16> c(M, N, reinterpret_cast<bfloat16*>(ptr_c), stride_c);

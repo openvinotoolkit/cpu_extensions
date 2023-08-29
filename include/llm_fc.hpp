@@ -5,6 +5,7 @@
 #pragma once
 
 #include "llm_types.hpp"
+#include "llm_tensor.hpp"
 
 namespace llmdnn {
 
@@ -65,13 +66,32 @@ void fc_kernel_destroy(fc_kernel* mm);
 // when fc_create_param.dt_b==bf16, dt_b is in [bf16, f32]
 // when fc_create_param.dt_b==s8, dt_b is in [bf16, f32]
 void fc_kernel_pack_weight(fc_kernel* mm, void* ptr_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end);
+void fc_kernel_pack_weight_to_dst(fc_kernel* mm, void* src_b, void* dst_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end);
+// ptr_b may be null if using fc_kernel_pack_weight to pack into internal buffer
+// if ptr_b is not null, its layout is [N/32, 32*rndup(K,32|64)]
 void fc_kernel_execute(fc_kernel* mm,
-        void* ptr_a, void* ptr_c, size_t stride_a, size_t stride_c,
+        void* ptr_a, void* ptr_b, void* ptr_c, size_t stride_a, size_t stride_c,
         size_t M, size_t N, size_t K, size_t n_start, size_t n_end,
         float* dq=nullptr, float* q=nullptr, float* bias=nullptr);
 
-/// weight compression
-/// compute weight min/max once, set q, dq for each fc_kernel instance
-void fc_kernel_bf16w8_get_q_dq(size_t K, size_t N, size_t stride, void* ptr, float* q, float* dq);
+/// Generates a fc based on param
+class fc {
+public:
+    fc();
+    ~fc();
+
+    bool init(const fc_create_param& param);
+    void pack_weight(const tensor& w);
+    status_t exec(const tensor& input, const tensor& output, const tensor& dq, const tensor& q, const tensor& bias);
+
+    struct impl {
+        virtual ~impl() {}
+        virtual bool init(const fc_create_param& param) = 0;
+        virtual void pack_weight(const tensor& w) = 0;
+        virtual status_t exec(const tensor& input, const tensor& output, const tensor& dq, const tensor& q, const tensor& bias) = 0;
+    };
+protected:
+    impl* _impl;
+};
 
 }  // namespace llmdnn
