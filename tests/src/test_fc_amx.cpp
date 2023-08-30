@@ -253,7 +253,7 @@ const std::vector<FCTestShape> shapes = {
     // M tail == unroll 8 + 2
     {256 + 10, 48, 449},
     // N tail
-    {256, 40, 448},
+    {256, 95, 448},
     // all tail
     {256 + 9, 47, 449},
     // gemv, K <= 64(32)*6

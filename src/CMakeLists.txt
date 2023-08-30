@@ -18,7 +18,7 @@ target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
 if(CPU_EXTENSIONS_ENABLE_LOG)
   target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_LOG)
 endif()
-target_link_libraries(${PROJECT_NAME} PUBLIC numa)
+target_link_libraries(${PROJECT_NAME} PUBLIC dl)
 
 set(CMAKE_DST lib/cmake/${PROJECT_NAME})
 # header files
