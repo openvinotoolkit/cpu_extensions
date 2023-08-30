@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <string>
 #include <sys/types.h>
-#include <vector>
 #include <iostream>
 
 #include "common/log.hpp"
@@ -100,7 +99,7 @@ tensor tensor::reshape(const std::initializer_list<size_t>& target_shape) const 
     // only valid for dense memory
     tensor new_tensor_view;
     assert(is_dense());
-    new_tensor_view.resize(std::vector<size_t>(target_shape), m_ptr, m_element_size, m_dtype);
+    new_tensor_view.resize(target_shape.begin(), target_shape.size(), m_ptr, m_element_size, m_dtype);
     return new_tensor_view;
 }
 
