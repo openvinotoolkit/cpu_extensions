@@ -31,6 +31,7 @@ struct fc_impl_amx : public fc::impl {
     void pack_weight(const tensor& w) override;
     status_t exec(const tensor& input, const tensor& output, const tensor& dq, const tensor& q, const tensor& bias) override;
     void associate_thread_numa(const llm_vector<int>& numa_nodes);
+    void init_weight_compress_param();
 
     fc_create_param _create_param;
     llm_vector<fc_kernel*> _kernel;             // one kernel for each numa node
@@ -46,6 +47,8 @@ struct fc_impl_amx : public fc::impl {
         size_t thread_no_in_one_numa = 0;       // sequence no in one numa node
     };
     llm_vector<work_info> _thread_infos;          // map thread id to numa node id and thread no in one numa node
+    tensor2D<float> _descale;
+    tensor2D<float> _zp;
 };
 
 fc_impl_amx::~fc_impl_amx() {
@@ -58,13 +61,37 @@ fc_impl_amx::~fc_impl_amx() {
     }
 }
 
+void fc_impl_amx::init_weight_compress_param() {
+    fc_create_param& param = _create_param;
+    if (param.scale) {
+        auto size = rndup(param.scale_zp_size, 64 / sizeof(float));
+        _descale.resize(1, size, false, false);
+        memcpy(_descale.data, param.scale, param.scale_zp_size * sizeof(float));
+        memset(_descale.data + param.scale_zp_size, 0, (size - param.scale_zp_size) * sizeof(float));
+        auto zp_size = rndup(param.scale_zp_size * 2, 64 / sizeof(float));
+        _zp.resize(1, zp_size, false, false);
+        if (param.zp) {
+            for (int i = 0; i < param.scale_zp_size; i++) {
+                _zp(0, 2 * i) = param.zp[i];
+                _zp(0, 2 * i + 1) = param.zp[i];
+            }
+            memset(_zp.data + param.scale_zp_size * 2, 0, (zp_size - param.scale_zp_size * 2) * sizeof(float));
+        } else {
+            memset(_zp.data, 0, zp_size * sizeof(float));
+        }
+        param.scale = _descale.data;
+        param.zp = _zp.data;
+    }
+}
+
 bool fc_impl_amx::init(const fc_create_param& param) {
     _create_param = param;
     _thread_nums = get_total_threads();
     _kernel.resize(_thread_nums, nullptr);
+    init_weight_compress_param();
     bool ret = true;
     for (size_t i = 0; i < _thread_nums; i++) {
-        if (fc_kernel_create(&_kernel[i], &param) != llmdnn::status_ok) {
+        if (fc_kernel_create(&_kernel[i], &_create_param) != llmdnn::status_ok) {
             ret = false;
             break;
         }
@@ -156,7 +183,7 @@ void fc_impl_amx::pack_weight(const tensor& w) {
     auto N_blocks = rndup(N, 32) / 32;
     // NOTE: assuming memory/thread is evenly distributed across mutiple numas. Need to support unbalanced numa?
     _N_in_one_numa = (N_blocks + numa_nodes_nums - 1) / numa_nodes_nums * 32;
-    if (_create_param.dt_b == data_type_t::llmdnn_bf16) {
+    if (_create_param.dt_a == data_type_t::llmdnn_bf16) {
         _K_align = rndup(K, 32);
     } else {
         _K_align = rndup(K, 64);

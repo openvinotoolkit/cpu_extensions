@@ -1202,6 +1202,56 @@ namespace functional {
         }
     }
 
+    template<int K>
+    void i8_to_bf16_Kx32(int8_t *&src, ov::bfloat16 *dst, float* zp)
+    {
+        auto zp0 = _mm512_loadu_ps(zp);
+        auto zp1 = _mm512_loadu_ps(zp + 16);
+        for (int k = 0; k < K; k++)
+        {
+            auto a = _mm_load_si128((__m128i *)src);        // 16 int8
+            auto b = _mm_load_si128((__m128i *)(src + 16)); // 16 int8
+            auto a_512 = _mm512_cvtepu8_epi32(a);           // 16 int32
+            auto b_512 = _mm512_cvtepu8_epi32(b);           // 16 int32
+            auto a_f = _mm512_cvtepi32_ps(a_512);           // 16 ps
+            auto b_f = _mm512_cvtepi32_ps(b_512);           // 16 ps
+            a_f = _mm512_sub_ps(a_f, zp0);
+            b_f = _mm512_sub_ps(b_f, zp1);
+            auto reg_out = _mm512_cvtne2ps_pbh(b_f, a_f); // 32 packed bf16
+            _mm512_store_epi32(dst, (__m512i)reg_out);    //
+            src += 32;                                    // 32 int8_t dequantized into 32 bf16
+            dst += 32;
+        }
+    }
+
+    // K tail, because right align need to fill zero for padding, real valid k is from invalid_k_num to the end
+    template<int K>
+    void i8_to_bf16_Kx32_tail(int8_t *&src, ov::bfloat16 *dst, float* zp, int k_start, int invalid_k_num)
+    {
+        auto zp0 = _mm512_loadu_ps(zp);
+        auto zp1 = _mm512_loadu_ps(zp + 16);
+        auto zero = _mm512_setzero_epi32();
+        for (int k = 0; k < K; k++) {
+            auto k_cur = k + k_start;
+            if (k_cur < invalid_k_num) {
+                _mm512_store_epi32(dst, zero);                
+            } else {
+                auto a = _mm_load_si128((__m128i *)src);        // 16 int8
+                auto b = _mm_load_si128((__m128i *)(src + 16)); // 16 int8
+                auto a_512 = _mm512_cvtepu8_epi32(a);           // 16 int32
+                auto b_512 = _mm512_cvtepu8_epi32(b);           // 16 int32
+                auto a_f = _mm512_cvtepi32_ps(a_512);            // 16 ps
+                auto b_f = _mm512_cvtepi32_ps(b_512);            // 16 ps
+                a_f = _mm512_sub_ps(a_f, zp0);
+                b_f = _mm512_sub_ps(b_f, zp1);
+                auto reg_out = _mm512_cvtne2ps_pbh(b_f, a_f); // 32 packed bf16
+                _mm512_store_epi32(dst, (__m512i)reg_out);
+            }
+            src += 32;
+            dst += 32;
+        }
+    }
+
     inline void bf16_to_i8_tensor(tensor2D<int8_t>& dst, tensor2D<ov::bfloat16>& src, float quant_scale) {
         dst.resize(src.dims[0], src.dims[1]);
         auto scale = _mm512_set1_ps(quant_scale);
@@ -1246,6 +1296,49 @@ namespace functional {
                 auto out = _mm512_cvtne2ps_pbh(x, x);
                 _mm256_mask_storeu_epi16(reinterpret_cast<__m256i*>(reinterpret_cast<ov::bfloat16*>(p_dst) + i),
                     x_mask, _mm512_extracti64x4_epi64(out, 0));
+            }
+        }
+    }
+
+    inline void u8_to_u16_tensor(tensor2D<uint16_t>& dst, const tensor2D<uint8_t>& src) {
+        dst.resize(src.dims[0], src.dims[1]);
+        auto tail = src.dims[1] % 32;
+        __mmask32 x_mask = _cvtu32_mask32(0xFFFFFFFF >> (32 - tail));
+        for (int k = 0; k < src.dims[0]; k++) {
+            auto p_src = &src(k, 0);
+            auto p_dst = &dst(k, 0);
+            int i;
+            for(i = 0; i < src.dims[1] / 32 * 32; i += 32) {
+                auto x = _mm256_loadu_epi8(p_src + i);
+                auto y = _mm512_cvtepu8_epi16(x);
+                _mm512_storeu_epi16(p_dst + i, y);
+            }
+            // handle tails
+            if (tail) {
+                auto x = _mm256_maskz_loadu_epi8(x_mask, p_src + i);
+                auto y = _mm512_cvtepu8_epi16(x);
+                _mm512_mask_storeu_epi16(p_dst + i, x_mask, y);
+            }
+        }
+    }
+
+    inline void u16_to_u8_tensor(tensor2D<uint8_t>&& dst, const tensor2D<uint16_t>& src) {
+        auto tail = src.dims[1] % 32;
+        __mmask32 x_mask = _cvtu32_mask32(0xFFFFFFFF >> (32 - tail));
+        for (int k = 0; k < src.dims[0]; k++) {
+            auto p_src = &src(k, 0);
+            auto p_dst = &dst(k, 0);
+            int i;
+            for(i = 0; i < src.dims[1] / 32 * 32; i += 32) {
+                auto x = _mm512_loadu_epi16(p_src + i);
+                auto y = _mm512_cvtusepi16_epi8(x);
+                _mm256_storeu_epi8(p_dst + i, y);
+            }
+            // handle tails
+            if (tail) {
+                auto x = _mm512_maskz_loadu_epi16(x_mask, p_src + i);
+                auto y = _mm512_cvtusepi16_epi8(x);
+                _mm256_mask_storeu_epi8(p_dst + i, x_mask, y);
             }
         }
     }
@@ -1705,6 +1798,135 @@ inline void repackB_1x2(tensor2D<float> &Bi, bool transpose, tensor2D<ov::bfloat
                 functional::f32_to_bf16_tensor(Btmp, tensor2D<float>(src_rows, N - n, &Bi(k, n), Bi.stride));
                 functional::kpack_tile_B0B1_ntail(dst, dst + 1024, &Btmp(0, 0), Btmp.stride, src_rows, N - n);
                 dst += 2048;
+            }
+            n += 16;
+        }
+    }
+}
+
+inline void repackB_1x2_compressed(tensor2D<uint8_t> &Bi, bool transpose, tensor2D<uint8_t>& Bo, bool is_const) {
+    int K = Bi.dims[transpose ? 1 : 0];
+    int N = Bi.dims[transpose ? 0 : 1];
+
+    // K_padded : round up to multiple of 32/64
+    int kStep = 32;
+    int K_padded = (K + kStep - 1) / kStep * kStep;
+    int Ktails = K % kStep;
+    int Kbody = K - Ktails;
+
+    // N_padded : round up to multiple of (2*16)
+    int N_unit = 2 * 16;
+    int N_padded = (N + N_unit - 1) / N_unit * N_unit;
+
+    // Bo(ni, 0) is a vector flattened from a slice of shape [K_padded x N_unit]
+    Bo.resize(N_padded / N_unit, K_padded * N_unit, false, is_const);
+
+    int n = 0;
+    int n_tail = N % N_unit;
+    if (transpose) {
+        tensor2D<uint16_t> Btmp(16, 32), transTmp(16, 32);
+        for(; n < N - n_tail; n += N_unit) {
+            // a K_padded x N_unit submatrix layouted in B0/B1... and put sequentially
+            auto* dst = reinterpret_cast<uint8_t*>(&Bo(n / N_unit, 0));
+            int k;
+            for(k = 0; k < Kbody; k += kStep) {
+                // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(16, 32, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16x16(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+                dst += 512;
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(16, 32, &Bi(n + 16, k), Bi.stride));
+                functional::transpose_epi32_16x16(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+                dst += 512;
+            }
+            if (Ktails) {
+                // Ktails part is loaded into A tile right-aligned, so B tile must also load
+                // Ktails part to bottom-aligned, and fill upper padding with zero
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(16, K - k, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16xN_right_align(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16));
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+                dst += 512;
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(16, K - k, &Bi(n + 16, k), Bi.stride));
+                functional::transpose_epi32_16xN_right_align(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16));
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+                dst += 512;
+            }
+        }
+        // n_tail: [16, 32)
+        if (N - n >= 16) {
+            auto* dst = reinterpret_cast<uint8_t*>(&Bo(n / N_unit, 0));
+            int k;
+            for(k = 0; k < Kbody; k += kStep) {
+                // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(16, 32, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16x16(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+                dst += 1024 * 1;
+            }
+            if (Ktails) {
+                // Ktails part is loaded into A tile right-aligned, so B tile must also load
+                // Ktails part to bottom-aligned, and fill upper padding with zero
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(16, K - k, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_16xN_right_align(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16));
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+            }
+            n += 16;
+        }
+        // n_tail: (0, 16)
+        if (N - n > 0) {
+            auto* dst = reinterpret_cast<uint8_t*>(&Bo(n / N_unit, 0)) + (n_tail > 16 ? 512 : 0);
+            int k;
+            for(k = 0; k < Kbody; k += kStep) {
+                // B0 (16x32) => transpose+repack as 32x16(16x16x2) or 64x16(16x16x4)
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(N - n, 32, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_Mx16(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride, N - n);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+                dst += 1024 * 1;
+            }
+            if (Ktails) {
+                // Ktails part is loaded into A tile right-aligned, so B tile must also load
+                // Ktails part to bottom-aligned, and fill upper padding with zero
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(N - n, K - k, &Bi(n, k), Bi.stride));
+                functional::transpose_epi32_MxN_right_align(&transTmp(0, 0), &Btmp(0, 0), Btmp.stride, (K - k) * sizeof(ov::bfloat16), N - n);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(16, 32, dst, 32), transTmp);
+            }
+            n = N;
+        }
+        // second B tile is untouched, need to set to zero 
+        if (n_tail > 0 && n_tail <= 16) {
+            auto* dst = reinterpret_cast<uint8_t*>(&Bo(n / N_unit, 0));
+            for (int k = 0; k < K_padded; k += kStep) {
+                memset(dst + 512, 0, 512);
+                dst += 1024 * 1;
+            }
+        }
+    } else {
+        // pack & layout sequentially
+        int n = 0;
+        int n_tail = N % N_unit;
+        tensor2D<uint16_t> Btmp(32, 32), transTmp(32, 32);
+        for(; n < N - n_tail; n += N_unit) {
+            auto * dst = reinterpret_cast<uint8_t*>(&Bo(n / N_unit, 0));
+            for(int k = 0; k < K; k += kStep) {
+                // bf16: B0 B1 32x(16+16) => repack as two 16x16x2
+                int src_rows = std::min(K - k, kStep);
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(src_rows, 32, &Bi(k, n), Bi.stride));
+                functional::kpack_tile_B0B1(&transTmp(0, 0), &transTmp(16, 0), reinterpret_cast<ov::bfloat16*>(&Btmp(0, 0)), Btmp.stride, src_rows);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(32, 32, dst, 32), transTmp);
+                dst += 1024;
+            }
+        }
+        // n_tail: (0, 32)
+        if (N - n > 0) {
+            auto * dst = reinterpret_cast<uint8_t*>(&Bo(n / N_unit, 0));
+            for(int k = 0; k < K; k += kStep) {
+                // bf16: B0 B1 32x(16+16) => repack as two 16x16x2
+                int src_rows = std::min(K - k, kStep);
+                functional::u8_to_u16_tensor(Btmp, tensor2D<uint8_t>(src_rows, N - n, &Bi(k, n), Bi.stride));
+                functional::kpack_tile_B0B1_ntail(&transTmp(0, 0), &transTmp(16, 0), reinterpret_cast<ov::bfloat16*>(&Btmp(0, 0)), Btmp.stride, src_rows, N - n);
+                functional::u16_to_u8_tensor(tensor2D<uint8_t>(32, 32, dst, 32), transTmp);
+                dst += 1024;
             }
             n += 16;
         }
@@ -2228,7 +2450,7 @@ struct Matmul {
             (ppkernel)(buffC, m, n + n0, valid_m, valid_n);
         };
 
-        if (M <= 32 && M >16) {
+        if (M <= 32 && M > 16) {
             // 2x2 tile, C:0/1/2/3 A:4/5 B:6/7 no blocking along M dimension
             tileconfig_t tfg(1, 0, {16,16,M-16,M-16,16,M-16,16,16}, 64);
             loop2D_no_bM<32>(M, N, kernel_2x2);
@@ -2251,8 +2473,8 @@ struct Matmul {
 // specialization:
 //  TA is ov::bfloat16 and TB is int8_t, decompressed on the fly into ov::bfloat16 by simply convert
 template<>
-struct Matmul<ov::bfloat16, int8_t, float> {
-    tensor2D<int8_t> internalBI8;
+struct Matmul<ov::bfloat16, uint8_t, float> {
+    tensor2D<uint8_t> internalBI8;
 
     // wei_buff is ping-pong buffer containing ov::bfloat16 weights decompressed on the fly.
     tensor2D<ov::bfloat16> weiBuff;
@@ -2270,8 +2492,8 @@ struct Matmul<ov::bfloat16, int8_t, float> {
     Matmul(bool constB = false, bool transposeB = false) : 
         constB(constB), transposeB(transposeB), buffC(32, 32) {}
 
-    float quant_scale_B;
-    float dequant_scale_B;
+    float* dequant_scale_B;
+    float* zp;
     
     template<typename PP>
     void operator()(tensor2D<ov::bfloat16> & matA,
@@ -2292,31 +2514,13 @@ struct Matmul<ov::bfloat16, int8_t, float> {
         int Kbody = K - Ktails;
         int Kbackoff = (kStep - Ktails);
 
-        // for non-constB, internalB is updated every time
-        // for constB, internalB is updated once
-        if (!constB || (internalBI8.capacity == 0)) {
-            // this dynamic quantization of weight matrix using minmax
-            // is time-consuming, should be used only for constB
-            if (!constB) {
-                DEBUG_LOG << "\t WANING: dynamic quantization of weight matrix for non-constB is time-consuming " << std::endl;
-            }
-            // float min, max;
-            // functional::get_min_max(_matB, min, max);
-            // max = std::max(std::abs(max), std::abs(min));
-            // quant_scale_B = 127 / max;
-            // dequant_scale_B = max / 127;
-
-            tensor2D<ov::bfloat16> internalTmpB;
-            repackB_1x2(matB, transposeB, internalTmpB, constB);
-            functional::bf16_to_i8_tensor(internalBI8, internalTmpB, quant_scale_B);
-        }
-
         ppkernel.set_deq_scale(dequant_scale_B);
+        auto zp_start = zp + n0 * 2;
 
         if (M <= 16) {
             // C:0/1  A:2  B:3/4
             // dequantize scale is moved into ppkernel
-            constexpr int prefetch_ahead = 64*1024;
+            //constexpr int prefetch_ahead = 64*1024;
             tileconfig_t tfg(1, 0, {M,M,M,16,16}, 64);
             auto * pBint = reinterpret_cast<int8_t*>(&internalBI8[0]);
             auto & B2buff = weiBuff;
@@ -2324,55 +2528,92 @@ struct Matmul<ov::bfloat16, int8_t, float> {
             auto * const pB = &B2buff[0];
             auto * pBsrc = pB + (32*32) * 0;
             auto * pBdst = pB + (32*32) * 1;
-            functional::i8_to_bf16_Kx32<32>(pBint, pBsrc);
-
             auto * const pC0 = &buffC[0];
             const auto strideA = matA.stride;
-            loop2D_no_bM<32>(M, N, [&](int m, int n, int valid_m, int valid_n) {
-                // C:Mx32 = A:Mx32 x B:32x32
-                _tile_zero(0);
-                _tile_zero(1);
-                auto * pA0 = &matA[0];
-                for(int k=0; k<Kbody; k+=kStep) {
-                    // 1x2
-                    _tile_loadd(2, pA0, strideA); pA0 += 32;   // tile A Mx32
-                    prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
+            if (Ktails) {
+                // with tails, will decompress current block's weights: if ahead we need to know the (tails - 1) which is in the
+                // tight loop, then special handle the decompress process - skip subtract zeropoint step
+                loop2D_no_bM<32>(M, N, [&](int m, int n, int valid_m, int valid_n) {
+                    // C:Mx32 = A:Mx32 x B:32x32
+                    _tile_zero(0);
+                    _tile_zero(1);
+                    auto * pA0 = &matA[0];
+                    auto cur_zp = zp_start + n * 2;
+                    for(int k=0; k<Kbody; k+=kStep) {
+                        // 1x2
+                        _tile_loadd(2, pA0, strideA); pA0 += 32;   // tile A Mx32
+                        //prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
 
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst);
-                    _tile_loadd(3, pBsrc, 64);
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 8*32);
-                    _tile_dpbf16ps(0, 2, 3); // C0 += A*B0
+                        functional::i8_to_bf16_Kx32<16>(pBint, pBsrc, cur_zp);
+                        _tile_loadd(3, pBsrc, 64);
+                        _tile_dpbf16ps(0, 2, 3); // C0 += A*B0
+                        functional::i8_to_bf16_Kx32<16>(pBint, pBsrc + 16 * 32, cur_zp + 32);
 
-                    prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 16*32);
-                    _tile_loadd(4, pBsrc + 16*32, 64);
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 24*32);
-                    _tile_dpbf16ps(1, 2, 4); // C1 += A*B1
-                    std::swap(pBsrc, pBdst);
-                }
-                if (Ktails) {
-                    _tile_loadd(2, pA0 - Kbackoff, strideA);    // backoff to prevent access beyond the end of A
-                    prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
+                        // prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
+                        _tile_loadd(4, pBsrc + 16*32, 64);
+                        _tile_dpbf16ps(1, 2, 4); // C1 += A*B1
+                        std::swap(pBsrc, pBdst);
+                    }
+                    // tails
+                    {
+                        _tile_loadd(2, pA0 - Kbackoff, strideA);    // backoff to prevent access beyond the end of A
+                        //prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
 
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst);
-                    _tile_loadd(3, pBsrc, 64);
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 8*32);
-                    _tile_dpbf16ps(0, 2, 3); // C0 += A*B0
+                        functional::i8_to_bf16_Kx32_tail<16>(pBint, pBsrc, cur_zp, 0, Kbackoff / 2);
+                        _tile_loadd(3, pBsrc, 64);
+                        _tile_dpbf16ps(0, 2, 3); // C0 += A*B0
 
-                    prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 16*32);
-                    _tile_loadd(4, pBsrc + 16*32, 64);
-                    functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 24*32);
-                    _tile_dpbf16ps(1, 2, 4); // C1 += A*B1
-                    std::swap(pBsrc, pBdst);
-                }
-                //prefetch_bytes(2048, _MM_HINT_T1, prefetch_ahead, pBint);
-                _tile_stored(0, pC0, buffC.stride);
-                _tile_stored(1, pC0 + 16, buffC.stride);
-                //prefetch_bytes(2048, _MM_HINT_T1, prefetch_ahead, pBint + 2048);
-                //int valid_n = std::min(N - n, 32);
-                (ppkernel)(buffC, 0, n + n0, M, valid_n);
-            });
+                        //prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
+                        functional::i8_to_bf16_Kx32_tail<16>(pBint, pBsrc + 16*32, cur_zp + 32, 0, Kbackoff / 2);
+                        _tile_loadd(4, pBsrc + 16*32, 64);
+                        _tile_dpbf16ps(1, 2, 4); // C1 += A*B1
+                        std::swap(pBsrc, pBdst);
+                    }
+                    //prefetch_bytes(2048, _MM_HINT_T1, prefetch_ahead, pBint);
+                    _tile_stored(0, pC0, buffC.stride);
+                    _tile_stored(1, pC0 + 16, buffC.stride);
+                    //prefetch_bytes(2048, _MM_HINT_T1, prefetch_ahead, pBint + 2048);
+                    //int valid_n = std::min(N - n, 32);
+                    (ppkernel)(buffC, 0, n + n0, M, valid_n);
+                });
+            } else {
+                // no tails, will decompress next block's weights ahead
+                functional::i8_to_bf16_Kx32<16>(pBint, pBsrc, zp_start);
+                functional::i8_to_bf16_Kx32<16>(pBint, pBsrc + 16 * 32, zp_start + 32);
+
+                loop2D_no_bM<32>(M, N, [&](int m, int n, int valid_m, int valid_n) {
+                    // C:Mx32 = A:Mx32 x B:32x32
+                    _tile_zero(0);
+                    _tile_zero(1);
+                    auto * pA0 = &matA[0];
+                    auto cur_zp = zp_start + n * 2;
+                    for(int k=0; k<Kbody; k+=kStep) {
+                        // weights are ahead of A, if reach the last K block, need to change to next N block
+                        cur_zp += (k == K - kStep) * 64;
+                        // 1x2
+                        _tile_loadd(2, pA0, strideA); pA0 += 32;   // tile A Mx32
+                        //prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
+
+                        functional::i8_to_bf16_Kx32<8>(pBint, pBdst, cur_zp);
+                        _tile_loadd(3, pBsrc, 64);
+                        functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 8*32, cur_zp);
+                        _tile_dpbf16ps(0, 2, 3); // C0 += A*B0
+
+                        //prefetch_bytes(512, _MM_HINT_T1, prefetch_ahead, pBint);
+                        functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 16*32, cur_zp + 32);
+                        _tile_loadd(4, pBsrc + 16*32, 64);
+                        functional::i8_to_bf16_Kx32<8>(pBint, pBdst + 24*32, cur_zp + 32);
+                        _tile_dpbf16ps(1, 2, 4); // C1 += A*B1
+                        std::swap(pBsrc, pBdst);
+                    }
+                    //prefetch_bytes(2048, _MM_HINT_T1, prefetch_ahead, pBint);
+                    _tile_stored(0, pC0, buffC.stride);
+                    _tile_stored(1, pC0 + 16, buffC.stride);
+                    //prefetch_bytes(2048, _MM_HINT_T1, prefetch_ahead, pBint + 2048);
+                    //int valid_n = std::min(N - n, 32);
+                    (ppkernel)(buffC, 0, n + n0, M, valid_n);
+                });
+            }
             return;
         }
 
@@ -2384,48 +2625,74 @@ struct Matmul<ov::bfloat16, int8_t, float> {
             auto * pA0 = &matA(m, 0);
             auto * pA1 = &matA(m + 16, 0);
             auto * pBint = reinterpret_cast<int8_t*>(&internalBI8(n>>5, 0));
-            functional::i8_to_bf16_Kx32<32>(pBint, pBb);
-
             _tile_zero(0);
             _tile_zero(1);
             _tile_zero(2);
             _tile_zero(3);
-            int k;
-            for (k = 0; k < Kbody; k += kStep) {
-                functional::i8_to_bf16_Kx32<16>(pBint, pBa);
-
-                _tile_loadd(4, pA0 + k, strideA);
-                _tile_loadd(6, pBb, 64);
-                _tile_dpbf16ps(0, 4, 6);
-
-                _tile_loadd(5, pA1 + k, strideA);
-                _tile_dpbf16ps(2, 5, 6);
-
-                functional::i8_to_bf16_Kx32<16>(pBint, pBa + 16*32);
-
-                _tile_loadd(7, pBb + 16*32, 64);
-                _tile_dpbf16ps(1, 4, 7);
-                _tile_dpbf16ps(3, 5, 7);
-
-                std::swap(pBa, pBb);
-            }
+            auto cur_zp = zp_start + n * 2;
             if (Ktails) {
-                functional::i8_to_bf16_Kx32<16>(pBint, pBa);
+                int k;
+                for (k = 0; k < Kbody; k += kStep) {
+                    functional::i8_to_bf16_Kx32<16>(pBint, pBa, cur_zp);
 
-                _tile_loadd(4, pA0 + k - Kbackoff, strideA);
-                _tile_loadd(6, pBb, 64);
-                _tile_dpbf16ps(0, 4, 6);
+                    _tile_loadd(4, pA0 + k, strideA);
+                    _tile_loadd(6, pBa, 64);
+                    _tile_dpbf16ps(0, 4, 6);
 
-                _tile_loadd(5, pA1 + k - Kbackoff, strideA);
-                _tile_dpbf16ps(2, 5, 6);
+                    _tile_loadd(5, pA1 + k, strideA);
+                    _tile_dpbf16ps(2, 5, 6);
 
-                functional::i8_to_bf16_Kx32<16>(pBint, pBa + 16*32);
+                    functional::i8_to_bf16_Kx32<16>(pBint, pBa + 16*32, cur_zp + 32);
 
-                _tile_loadd(7, pBb + 16*32, 64);
-                _tile_dpbf16ps(1, 4, 7);
-                _tile_dpbf16ps(3, 5, 7);
+                    _tile_loadd(7, pBa + 16*32, 64);
+                    _tile_dpbf16ps(1, 4, 7);
+                    _tile_dpbf16ps(3, 5, 7);
 
-                std::swap(pBa, pBb);
+                    std::swap(pBa, pBb);
+                }
+                // tails
+                {
+                    functional::i8_to_bf16_Kx32_tail<16>(pBint, pBa, cur_zp, 0, Kbackoff / 2);
+
+                    _tile_loadd(4, pA0 + k - Kbackoff, strideA);
+                    _tile_loadd(6, pBa, 64);
+                    _tile_dpbf16ps(0, 4, 6);
+
+                    _tile_loadd(5, pA1 + k - Kbackoff, strideA);
+                    _tile_dpbf16ps(2, 5, 6);
+
+                    functional::i8_to_bf16_Kx32_tail<16>(pBint, pBa + 16*32, cur_zp + 32, 0, Kbackoff / 2);
+
+                    _tile_loadd(7, pBa + 16*32, 64);
+                    _tile_dpbf16ps(1, 4, 7);
+                    _tile_dpbf16ps(3, 5, 7);
+
+                    std::swap(pBa, pBb);
+                }
+            } else {
+                functional::i8_to_bf16_Kx32<16>(pBint, pBb, cur_zp);
+                functional::i8_to_bf16_Kx32<16>(pBint, pBb + 16 * 32, cur_zp + 32);
+
+                for (int k = 0; k < Kbody; k += kStep) {
+                    // weights are ahead of A, if reach the last K block, need to change to next N block
+                    cur_zp += (k == K - kStep) * 64;
+                    functional::i8_to_bf16_Kx32<16>(pBint, pBa, cur_zp);
+
+                    _tile_loadd(4, pA0 + k, strideA);
+                    _tile_loadd(6, pBb, 64);
+                    _tile_dpbf16ps(0, 4, 6);
+
+                    _tile_loadd(5, pA1 + k, strideA);
+                    _tile_dpbf16ps(2, 5, 6);
+
+                    functional::i8_to_bf16_Kx32<16>(pBint, pBa + 16*32, cur_zp + 32);
+
+                    _tile_loadd(7, pBb + 16*32, 64);
+                    _tile_dpbf16ps(1, 4, 7);
+                    _tile_dpbf16ps(3, 5, 7);
+
+                    std::swap(pBa, pBb);
+                }
             }
             _tile_stored(0, &buffC(0,0), buffC.stride);
             _tile_stored(1, &buffC(0,16), buffC.stride);

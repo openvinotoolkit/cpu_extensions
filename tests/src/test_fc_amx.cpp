@@ -146,6 +146,89 @@ protected:
         ASSERT_TRUE(compare(C, C_Ref, thresh));
     }
 
+    template<typename TA, typename TB, typename TC>
+    void do_test_wc() {
+        fc_create_param param = {
+            _dt_a, _dt_b, _dt_c,
+            _is_transpose, _postops_type
+        };
+        // bf16 needs divisible by 2
+        if (_K % 2 == 1) _K += 1;
+
+        tensor2D<TA> A(_M, _K, true);
+        tensor2D<uint8_t> B(_K, _N, true);
+        tensor2D<TC> C(_M, _N, true);
+        tensor2D<TC> C_Ref(_M, _N, true);
+        tensor2D<float> dq(1, _N);
+        tensor2D<float> zp(1, _N);
+        tensor2D<float> bias(1, _N);
+
+        fill_rnd(A);
+        for (int i = 0; i < _N; i++) {
+            // make all weight 1: w - zp == 1
+            zp.data[i] = static_cast<float>(i % 255) - 1;
+            dq.data[i] = (i % 3) * 0.5;
+            for (int j = 0; j < _K; j++) {
+                B(j, i) = i % 255;
+            }
+        }
+        fill_rnd(bias);
+        param.scale = dq.data;
+        param.zp = zp.data;
+        param.scale_zp_size = _N;
+        llmdnn::fc fc;
+        ASSERT_TRUE(fc.init(param));
+
+        tensor2D<uint8_t> BT = B.Tr(true);
+        uint8_t* ptr_B;
+        size_t ldb;
+        tensor weight;
+        if (_is_transpose) {
+            ptr_B = BT.data;
+            ldb = BT.stride;
+            weight.resize({ static_cast<size_t>(BT.dims[0]), static_cast<size_t>(BT.dims[1]) }, static_cast<uint8_t*>(ptr_B));
+        } else {
+            ptr_B = B.data;
+            ldb = B.stride;
+            weight.resize({ static_cast<size_t>(B.dims[0]), static_cast<size_t>(B.dims[1]) }, static_cast<uint8_t*>(ptr_B));
+        }
+        fc.pack_weight(weight);
+        tensor input, output, bias_t, q_t, dq_t;
+        input.resize({ static_cast<size_t>(A.dims[0]), static_cast<size_t>(A.dims[1]) }, static_cast<TA*>(A.data));
+        output.resize({ static_cast<size_t>(C.dims[0]), static_cast<size_t>(C.dims[1]) }, static_cast<TC*>(C.data));
+        dq_t.resize({ static_cast<size_t>(dq.dims[0]), static_cast<size_t>(dq.dims[1]) }, dq.data);
+        bias_t.resize({ static_cast<size_t>(bias.dims[0]), static_cast<size_t>(bias.dims[1]) }, bias.data);
+        ASSERT_TRUE(fc.exec(input, output, dq_t, q_t, bias_t) == llmdnn::status_ok);
+        C_Ref = 0;
+        float* ptr_dq = nullptr;
+        float* ptr_q = nullptr;
+        float* ptr_bias = nullptr;
+        func_act act = func_act(); 
+        ptr_dq = dq.data;
+        if (_postops_type & BIAS) {
+            ptr_bias = bias.data;
+        }
+        if (_postops_type & GELU) {
+            act = [] (float x) {
+                return x * 0.5 * (1 + std::erf(x / std::sqrt(2)));
+            };
+        }
+        if (_postops_type & GELU_TANH) {
+            act = [] (float x) {
+                return 0.5f * x * (1.0f + std::tanh(std::sqrt(2.0f / 3.1415926f) * x * (1 + 0.044715f * x * x)));
+            };
+        }
+
+        B = 1;
+        matmul(A, B, C_Ref, ptr_dq, ptr_bias, act, ptr_q);
+        float thresh = 0.0001f;
+        if (std::is_same<TA, int8_t>::value || std::is_same<TA, uint8_t>::value)
+            thresh = 1.1f;
+        if (std::is_same<TA, ov::bfloat16>::value)
+            thresh = 0.01f;
+        ASSERT_TRUE(compare(C, C_Ref, thresh));
+    }
+
     int _M, _N, _K;
     bool _is_transpose;
     postops_types _postops_type;
@@ -167,6 +250,10 @@ TEST_P(FCTest, Func) {
         do_test<ov::bfloat16, float, ov::bfloat16>();
     } else if (_dt_a == llmdnn_bf16 && _dt_weight == llmdnn_f32 && _dt_c == llmdnn_f32) {
         do_test<ov::bfloat16, float, float>();
+    } else if (_dt_a == llmdnn_bf16 && _dt_weight == llmdnn_u8 && _dt_c == llmdnn_bf16) {
+        do_test_wc<ov::bfloat16, uint8_t, ov::bfloat16>();
+    } else if (_dt_a == llmdnn_bf16 && _dt_weight == llmdnn_u8 && _dt_c == llmdnn_f32) {
+        do_test_wc<ov::bfloat16, uint8_t, float>();
     } else {
         ASSERT_TRUE(false);
     }
@@ -178,8 +265,8 @@ TEST_P(FCTest, Func) {
 //  (s8,s8,f32),dq,[bias],[gelu]
 //  (bf16,bf16,bf16),[bias],[gelu]
 //  (bf16,bf16,f32),[bias],[gelu]
-//  (bf16,s8,f32),dq,[bias],[gelu]
-//  (bf16,s8,bf16),dq,[bias],[gelu]
+//  (bf16,u8,f32),dq,[bias],[gelu]
+//  (bf16,u8,bf16),dq,[bias],[gelu]
 const std::vector<FCTestDTPost> types = {
     { llmdnn_s8, llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_QUANT },
     { llmdnn_s8, llmdnn_s8, llmdnn_s8, llmdnn_s8, DEQUANT_BIAS_QUANT },
@@ -224,38 +311,29 @@ const std::vector<FCTestDTPost> types = {
     { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, llmdnn_f32, GELU_TANH },
     { llmdnn_bf16, llmdnn_bf16, llmdnn_f32, llmdnn_f32, BIAS_GELU_TANH },
     // weight compression
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_bf16, DEQUANT },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_bf16, DEQUANT_BIAS },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_bf16, DEQUANT_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_bf16, DEQUANT_BIAS_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_bf16, DEQUANT },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_bf16, DEQUANT_BIAS },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_bf16, DEQUANT_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_bf16, DEQUANT_BIAS_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_f32, DEQUANT },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_f32, DEQUANT_BIAS },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_f32, DEQUANT_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_f32, llmdnn_f32, DEQUANT_BIAS_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_f32, DEQUANT },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_f32, DEQUANT_BIAS },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_f32, DEQUANT_GELU },
-    { llmdnn_bf16, llmdnn_s8, llmdnn_bf16, llmdnn_f32, DEQUANT_BIAS_GELU },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_f32, llmdnn_u8, DEQUANT },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_f32, llmdnn_u8, DEQUANT_BIAS },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_f32, llmdnn_u8, DEQUANT_GELU },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_f32, llmdnn_u8, DEQUANT_BIAS_GELU },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_bf16, llmdnn_u8, DEQUANT },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_bf16, llmdnn_u8, DEQUANT_BIAS },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_bf16, llmdnn_u8, DEQUANT_GELU },
+    { llmdnn_bf16, llmdnn_u8, llmdnn_bf16, llmdnn_u8, DEQUANT_BIAS_GELU },
 };
 
 // M, N, K
 const std::vector<FCTestShape> shapes = {
     // normal
     {256, 128, 448},
-    // k tail
-    {256, 48, 449},
-    // M tail == unroll 8
-    {256 + 8, 48, 449},
-    // M tail == unroll 8 + 2
-    {256 + 10, 48, 449},
-    // N tail
-    {256, 95, 448},
+    // M < 16
+    {15, 129, 447},
+    {15, 129, 448},
+    // M in (16, 32]
+    {31, 129, 447},
+    {31, 129, 448},
     // all tail
-    {256 + 9, 47, 449},
+    {256 + 9, 129, 449},
+    {256 + 9, 129, 448},
     // gemv, K <= 64(32)*6
     {256, 1, 80},
 };

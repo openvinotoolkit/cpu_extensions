@@ -133,12 +133,67 @@ protected:
         testone(64 + 16 + 3, 128 + 16 + 5, "alltail");
     }
 
+    void test_wc() {
+        auto testone = [] (int k, int n, std::string prefix) {
+            tensor2D<uint8_t> A(k, n, true);
+
+            // get ref result
+            tensor2D<uint8_t> A_ref;
+            tensor2D<ov::bfloat16> A_bf16(k, n, true), A_ref_bf16;
+            for (int i = 0; i < k * n; i++) {
+                A.data[i] = i % 23;
+                A_bf16.data[i] = ov::bfloat16(i % 23);
+            }
+            amx_kernel::repackB_1x2(A_bf16, false, A_ref_bf16, true);
+            A_ref.resize(A_ref_bf16.dims[0], A_ref_bf16.dims[1], true);
+            for (int i = 0; i < A_ref_bf16.dims[0] * A_ref_bf16.dims[1]; i++) {
+                A_ref.data[i] = static_cast<uint8_t>(float(A_ref_bf16.data[i]));
+            }
+
+            tensor2D<uint8_t> AT = A.Tr(true);
+            tensor2D<uint8_t> A_out, AT_out;
+            amx_kernel::repackB_1x2_compressed(A, false, A_out, true);
+            amx_kernel::repackB_1x2_compressed(AT, true, AT_out, true);
+            ASSERT_TRUE(A_out == A_ref) << " " << prefix << " without transform K: " << k << " N: " << n;
+            ASSERT_TRUE(AT_out == A_ref) << " " << prefix << " with transform K: " << k << " N: " << n;
+        };
+        // n tail: transpose case needs from 1 to 31, without transpose needs one
+        int k = 32;
+        int n;
+        for (n = 1; n < 32; n++) {
+            testone(k, n, "ntail");
+        }
+        for (n = 32 + 1; n < 32 + 32; n++) {
+            testone(k, n, "ntail");
+        }
+        // k tail: transpose case needs 1, without transpose needs from 1 to 31
+        n = 32;
+        for (k = 1; k < 32; k++) {
+            testone(k, n, "ktail");
+        }
+        for (k = 32 + 1; k < 32 + 32; k++) {
+            testone(k, n, "ktail");
+        }
+        // k, n normal
+        testone(32, 32, "normal");
+        testone(64, 128, "normal");
+        // k, n tail
+        testone(64, 128 + 5, "ntail");
+        testone(64 + 3, 128, "ktail");
+        testone(64 + 3, 128 + 5, "alltail");
+        testone(64, 128 + 16 + 5, "ntail");
+        testone(64 + 16 + 3, 128, "ktail");
+        testone(64 + 16 + 3, 128 + 16 + 5, "alltail");
+    }
+
     std::pair<data_type_t, data_type_t> _types;
 };
 
 TEST_P(RepackTest, Func) {
     if (_types.first == llmdnn_s8 && _types.second == llmdnn_s8) {
         test<int8_t, int8_t>();
+    } else if (_types.first == llmdnn_u8 && _types.second == llmdnn_u8) {
+        test_wc();
     } else if (_types.first == llmdnn::llmdnn_bf16 && _types.second == llmdnn_bf16) {
         test<ov::bfloat16, ov::bfloat16>();
     } else {
@@ -147,6 +202,7 @@ TEST_P(RepackTest, Func) {
 }
 
 const std::vector<std::pair<data_type_t, data_type_t>> types = {
+    {llmdnn_u8, llmdnn_u8},     // compress weight
     {llmdnn_s8, llmdnn_s8},
     {llmdnn_bf16, llmdnn_bf16},
     {llmdnn_f32, llmdnn_bf16},

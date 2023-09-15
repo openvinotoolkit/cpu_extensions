@@ -23,7 +23,7 @@ namespace llmdnn {
 using ov::bfloat16;
 struct fc_kernel {
     std::unique_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>> bf16xbf16;
-    std::unique_ptr<amx_kernel::Matmul<ov::bfloat16, int8_t>> bf16xi8;
+    std::unique_ptr<amx_kernel::Matmul<ov::bfloat16, uint8_t>> bf16xi8;
     std::unique_ptr<amx_kernel::Matmul<int8_t, int8_t>> i8xi8;
     std::unique_ptr<amx_kernel::Matmul<uint8_t, int8_t>> u8xi8;
 
@@ -44,8 +44,8 @@ static bool check_valid_postops(size_t value, data_type_t dt_a, data_type_t dt_b
         { { llmdnn_s8, llmdnn_s8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
         { { llmdnn_bf16, llmdnn_bf16, llmdnn_bf16 }, { 0, BIAS | GELU | GELU_TANH } },
         { { llmdnn_bf16, llmdnn_bf16, llmdnn_f32 }, { 0, BIAS | GELU | GELU_TANH } },
-        { { llmdnn_bf16, llmdnn_s8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
-        { { llmdnn_bf16, llmdnn_s8, llmdnn_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_bf16, llmdnn_u8, llmdnn_f32 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
+        { { llmdnn_bf16, llmdnn_u8, llmdnn_bf16 }, { DEQUANT, BIAS | GELU | GELU_TANH } },
     };
 
     auto it = supported_postops.find(std::make_tuple(dt_a, dt_b, dt_c));
@@ -88,10 +88,10 @@ status_t fc_kernel_create_amx(fc_kernel** mm, const fc_create_param* param) {
         m->u8xi8 = std::make_unique<amx_kernel::Matmul<uint8_t, int8_t>>(true, param->b_is_trans);
     } else if (param->dt_a == llmdnn_bf16 && (param->dt_b == llmdnn_bf16 || param->dt_b == llmdnn_f32)) {
         m->bf16xbf16 = std::make_unique<amx_kernel::Matmul<bfloat16, bfloat16>>(true, param->b_is_trans);
-    } else if (param->dt_a == llmdnn_bf16 && param->dt_b == llmdnn_s8) {
-        m->bf16xi8 = std::make_unique<amx_kernel::Matmul<bfloat16, int8_t>>(true, param->b_is_trans);
-        m->bf16xi8->quant_scale_B = param->q;
-        m->bf16xi8->dequant_scale_B = param->dq;
+    } else if (param->dt_a == llmdnn_bf16 && param->dt_b == llmdnn_u8) {
+        m->bf16xi8 = std::make_unique<amx_kernel::Matmul<bfloat16, uint8_t>>(true, param->b_is_trans);
+        m->bf16xi8->dequant_scale_B = param->scale;
+        m->bf16xi8->zp = param->zp;
     } else {
         DEBUG_LOG << "fc_kernel_create: unsupport input type, a: " << param->dt_a << ", b: " << param->dt_b << ".\n";
         goto ERR;
@@ -142,21 +142,10 @@ void fc_kernel_pack_weight_amx(fc_kernel* mm, void* ptr_b, data_type_t dt_b, siz
             amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
         }
     } else {
-        tensor2D<ov::bfloat16> internalTmpB;
-        if (dt_b == llmdnn_bf16) {
-            tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(ptr_b), mm->stride_b);
-            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
-            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
-        } else {
-            tensor2D<float> b(b_d0, b_d1, static_cast<float*>(ptr_b), mm->stride_b);
-            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
-            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
-        }
-        if (mm->bf16xi8->dequant_scale_B == 0) {
-            fc_kernel_bf16w8_get_q_dq_amx(internalTmpB.dims[0], internalTmpB.dims[1], internalTmpB.stride, internalTmpB.data,
-                &mm->bf16xi8->quant_scale_B, &mm->bf16xi8->dequant_scale_B);
-        }
-        amx_kernel::functional::bf16_to_i8_tensor(mm->bf16xi8->internalBI8, internalTmpB, mm->bf16xi8->quant_scale_B);
+        assert(dt_b == llmdnn_u8);
+        tensor2D<uint8_t> b(b_d0, b_d1, static_cast<uint8_t*>(ptr_b), mm->stride_b);
+        auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+        amx_kernel::repackB_1x2_compressed(matB, mm->b_is_transpose, mm->bf16xi8->internalBI8, true);
     }
 }
 
@@ -193,23 +182,12 @@ void fc_kernel_pack_weight_to_dst_amx(fc_kernel* mm, void* src_b, void* dst_b, d
             amx_kernel::repackB_1x2(matB, mm->b_is_transpose, mm->bf16xbf16->internalB, true);
         }
     } else {
-        tensor2D<ov::bfloat16> internalTmpB;
-        mm->bf16xi8->internalBI8 = tensor2D<int8_t>(1, 1, static_cast<int8_t*>(dst_b), 1);
+        assert(dt_b == llmdnn_u8);
+        mm->bf16xi8->internalBI8 = tensor2D<uint8_t>(1, 1, static_cast<uint8_t*>(dst_b), 1);
         mm->bf16xi8->internalBI8.capacity = INT_MAX;
-        if (dt_b == llmdnn_bf16) {
-            tensor2D<bfloat16> b(b_d0, b_d1, static_cast<bfloat16*>(src_b), mm->stride_b);
-            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
-            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
-        } else {
-            tensor2D<float> b(b_d0, b_d1, static_cast<float*>(src_b), mm->stride_b);
-            auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
-            amx_kernel::repackB_1x2(matB, mm->b_is_transpose, internalTmpB, true);
-        }
-        if (mm->bf16xi8->dequant_scale_B == 0) {
-            fc_kernel_bf16w8_get_q_dq_amx(internalTmpB.dims[0], internalTmpB.dims[1], internalTmpB.stride, internalTmpB.data,
-                &mm->bf16xi8->quant_scale_B, &mm->bf16xi8->dequant_scale_B);
-        }
-        amx_kernel::functional::bf16_to_i8_tensor(mm->bf16xi8->internalBI8, internalTmpB, mm->bf16xi8->quant_scale_B);
+        tensor2D<uint8_t> b(b_d0, b_d1, static_cast<uint8_t*>(src_b), mm->stride_b);
+        auto matB = amx_kernel::getSubMatB(b, n_start, n_end, mm->b_is_transpose);
+        amx_kernel::repackB_1x2_compressed(matB, mm->b_is_transpose, mm->bf16xi8->internalBI8, true);
     }
 }
 
@@ -397,8 +375,8 @@ void fc_kernel_execute_amx(fc_kernel* mm, void* ptr_a, void* ptr_b, void* ptr_c,
         tensor2D<bfloat16> b(b_d0, b_d1, nullptr, mm->stride_b);
 
         if (ptr_b) {
-            auto K_padded = rndup(K, 64);
-            mm->bf16xi8->internalBI8 = tensor2D<int8_t>(N / 32, 32 * K_padded, static_cast<int8_t*>(ptr_b), 32 * K_padded);
+            auto K_padded = rndup(K, 32);
+            mm->bf16xi8->internalBI8 = tensor2D<uint8_t>(N / 32, 32 * K_padded, static_cast<uint8_t*>(ptr_b), 32 * K_padded);
         }
 
         if (mm->dt_c == llmdnn_bf16) {

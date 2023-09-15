@@ -43,8 +43,9 @@ struct fc_create_param {
     bool b_is_trans;
     postops_types postops_type;
     // for weight compression
-    float q;
-    float dq;
+    float* scale;
+    float* zp;
+    int scale_zp_size;
 };
 
 struct fc_kernel;
@@ -58,13 +59,13 @@ struct fc_kernel;
 ///        fc: (s8,s8,f32),dq,[bias],[gelu]
 ///        fc: (bf16,bf16,bf16),[bias],[gelu]
 ///        fc: (bf16,bf16,f32),[bias],[gelu]
-///        fc: (bf16,s8,f32),dq,[bias],[gelu]
-///        fc: (bf16,s8,bf16),dq,[bias],[gelu]
+///        fc: (bf16,u8,f32),dq,[bias],[gelu]
+///        fc: (bf16,u8,bf16),dq,[bias],[gelu]
 ///
 status_t fc_kernel_create(fc_kernel** mm, const fc_create_param* param);
 void fc_kernel_destroy(fc_kernel* mm);
 // when fc_create_param.dt_b==bf16, dt_b is in [bf16, f32]
-// when fc_create_param.dt_b==s8, dt_b is in [bf16, f32]
+// when fc_create_param.dt_b==u8, dt_b is in [bf16, f32]
 void fc_kernel_pack_weight(fc_kernel* mm, void* ptr_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end);
 void fc_kernel_pack_weight_to_dst(fc_kernel* mm, void* src_b, void* dst_b, data_type_t dt_b, size_t N, size_t K, size_t stride_b, size_t n_start, size_t n_end);
 // ptr_b may be null if using fc_kernel_pack_weight to pack into internal buffer

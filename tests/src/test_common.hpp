@@ -21,8 +21,6 @@
 #endif
 #include <stdlib.h>
 
-#define rndup(x, n) (((x + n - 1)/n)*n)
-
 std::string dtype_to_str(llmdnn::data_type_t type);
 
 using func_act = std::function<float(float)>;

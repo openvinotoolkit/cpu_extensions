@@ -13,7 +13,7 @@
 #include "log.hpp"
 #include "bf16.hpp"
 
-#define rndup(x, n) (((x + n - 1)/n)*n)
+#define rndup(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
 template<typename T>
 struct tensor2D {
