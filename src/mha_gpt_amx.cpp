@@ -116,6 +116,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
     auto head_size = q.m_dims[3];
     auto key_seq_len = k.m_dims[2];
     bool is_bloom = k.m_strides[3] > k.m_strides[2];
+    auto h_group_num = k.m_dims[1];
+    size_t h_each_group_len = head_num / h_group_num;
 
     uint8_t* out = output.data<uint8_t>();
 
@@ -130,8 +132,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
     if (use_gemv) {
         parallel_for2d(batch, head_num, [&](size_t thread_id, size_t i0, size_t i1) {
             auto q_sub = &q.at<uint8_t>({i0, i1});
-            auto k_sub = &k.at<uint8_t>({i0, i1});
-            auto v_sub = &v.at<uint8_t>({i0, i1});
+            auto k_sub = &k.at<uint8_t>({i0, i1 / h_each_group_len});
+            auto v_sub = &v.at<uint8_t>({i0, i1 / h_each_group_len});
 
             auto mat0_out = reinterpret_cast<uint8_t*>(_buffer_mat0_out + thread_id * _buffer_mat0_out_size);
             auto mat1_out = reinterpret_cast<uint8_t*>(_buffer_mat1_out + thread_id * _buffer_mat1_out_size);
@@ -177,8 +179,8 @@ void mha_gpt_impl_amx::mha_bf16(const tensor& q, const tensor& k, const tensor& 
                 // k: [batch, head_num, key_seq_len, head_size]
                 // v: [batch, head_num, value_seq_len, head_size]
                 auto q_sub = &q.at<ov::bfloat16>({i0, i1, seq_start});
-                auto k_sub = &k.at<ov::bfloat16>({i0, i1});
-                auto v_sub = &v.at<ov::bfloat16>({i0, i1});
+                auto k_sub = &k.at<ov::bfloat16>({i0, i1 / h_each_group_len});
+                auto v_sub = &v.at<ov::bfloat16>({i0, i1 / h_each_group_len});
 
                 auto mat0_out = reinterpret_cast<float*>(_buffer_mat0_out + thread_id * _buffer_mat0_out_size);
                 auto mat1_out = reinterpret_cast<float*>(_buffer_mat1_out + thread_id * _buffer_mat1_out_size);
@@ -279,7 +281,7 @@ status_t mha_gpt_impl_amx::exec(const tensor& q, const tensor& k, const tensor& 
     auto key_seq_len = k.m_dims[2];
 
     if (!(batch == k.m_dims[0] && batch == v.m_dims[0] &&
-          head_num == k.m_dims[1] && head_num == v.m_dims[1] &&
+          k.m_dims[1] == v.m_dims[1] &&
           key_seq_len == v.m_dims[2] &&
           head_size == k.m_dims[3] && head_size == v.m_dims[3])) {
         DEBUG_LOG << "dim of q,k,v is error.\n";

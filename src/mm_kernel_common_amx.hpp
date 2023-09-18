@@ -2476,21 +2476,13 @@ template<>
 struct Matmul<ov::bfloat16, uint8_t, float> {
     tensor2D<uint8_t> internalBI8;
 
-    // wei_buff is ping-pong buffer containing ov::bfloat16 weights decompressed on the fly.
-    tensor2D<ov::bfloat16> weiBuff;
-
     bool constB;
     bool transposeB;
 
     constexpr static int kStep = 32;
 
-    // 2x2 C tiles buffer
-    // most usecase requires post-processing with AVX, thus buffC
-    // is used to transfer data to AVX register
-    tensor2D<float> buffC;
-
     Matmul(bool constB = false, bool transposeB = false) : 
-        constB(constB), transposeB(transposeB), buffC(32, 32) {}
+        constB(constB), transposeB(transposeB) {}
 
     float* dequant_scale_B;
     float* zp;
@@ -2500,6 +2492,14 @@ struct Matmul<ov::bfloat16, uint8_t, float> {
                     tensor2D<ov::bfloat16> & _matB,
                     int n0, int n1,
                     PP ppkernel) {
+        alignas(64) float buff[32 * 32];
+        // wei_buff is ping-pong buffer containing ov::bfloat16 weights decompressed on the fly.
+        alignas(64) ov::bfloat16 weiBuff[32 * 2 * 32];
+        // 2x2 C tiles buffer
+        // most usecase requires post-processing with AVX, thus buffC
+        // is used to transfer data to AVX register
+        tensor2D<float> buffC(32, 32, buff, 32 * sizeof(float));
+
         auto matB = getSubMatB(_matB, n0, n1, transposeB);
         int M = matA.dims[0];
         int K = matA.dims[1];
@@ -2523,9 +2523,7 @@ struct Matmul<ov::bfloat16, uint8_t, float> {
             //constexpr int prefetch_ahead = 64*1024;
             tileconfig_t tfg(1, 0, {M,M,M,16,16}, 64);
             auto * pBint = reinterpret_cast<int8_t*>(&internalBI8[0]);
-            auto & B2buff = weiBuff;
-            B2buff.resize(32*2, 32);
-            auto * const pB = &B2buff[0];
+            auto * const pB = weiBuff;
             auto * pBsrc = pB + (32*32) * 0;
             auto * pBdst = pB + (32*32) * 1;
             auto * const pC0 = &buffC[0];
