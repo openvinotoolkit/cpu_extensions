@@ -31,6 +31,7 @@ struct fc_impl_amx : public fc::impl {
     void pack_weight(const tensor& w) override;
     status_t exec(const tensor& input, const tensor& output, const tensor& dq, const tensor& q, const tensor& bias) override;
     void associate_thread_numa(const llm_vector<int>& numa_nodes);
+    void init_m_block();
     void init_weight_compress_param();
 
     fc_create_param _create_param;
@@ -40,6 +41,8 @@ struct fc_impl_amx : public fc::impl {
     llm_vector<int> _numa_nodes;                // numa nodes
     size_t _thread_nums;                        // thread numbers
     size_t _N_in_one_numa;                      // N on each numa node
+    size_t _m_block_num_idea;                   // idea m block number for best thread balance
+    size_t _n_block_num_idea;                   // idea n block number for best thread balance
     llm_vector<int> _thread_nums_in_one_numa;   // thread numbers in one numa node
     size_t _K_align;
     struct work_info {
@@ -102,6 +105,27 @@ bool fc_impl_amx::init(const fc_create_param& param) {
     }
 
     return ret;
+}
+
+void fc_impl_amx::init_m_block() {
+    size_t div = 2;
+    auto work_amount = _N_in_one_numa / 32;
+    size_t work = work_amount;
+    // worse case: M block number is _thread_num
+    size_t threads = std::max(1ul, _thread_nums / _numa_nodes.size());
+    while (div <= work_amount) {
+        // if work and threads can be divided by div, M block number can be dived by div
+        if (work % div == 0 && threads % div == 0) {
+            threads /= div;
+            work /= div;
+        } else {
+            div++;
+        }
+        if (work < div)
+            break;
+    }
+    _m_block_num_idea = threads;
+    _n_block_num_idea = _thread_nums / _numa_nodes.size() / threads;
 }
 
 void fc_impl_amx::associate_thread_numa(const llm_vector<int>& numa_nodes) {
@@ -214,6 +238,7 @@ void fc_impl_amx::pack_weight(const tensor& w) {
         auto dst = _weights[numa_id] + n0_in_one_numa * _K_align * get_precision_size(_create_param.dt_b);
         fc_kernel_pack_weight_to_dst(_kernel[id], w.data<int8_t>(), dst, w.m_dtype, N, K, w.stride(0), n0, n1);
     });
+    init_m_block();
 }
 
 status_t fc_impl_amx::exec(const tensor& input, const tensor& output, const tensor& dq, const tensor& q, const tensor& bias) {
@@ -225,24 +250,78 @@ status_t fc_impl_amx::exec(const tensor& input, const tensor& output, const tens
     auto M = input.size(0);
     auto N = output.size(1);
     auto K = input.size(1);
-    auto work_amount_in_one_numa = _N_in_one_numa / 32;
-    parallel_for(_thread_nums, [&](size_t id) {
-        auto numa_id = _thread_infos[id].numa_id;
-        auto thread_no_in_one_numa = _thread_infos[id].thread_no_in_one_numa;
-        size_t start, end;
-        splitter(work_amount_in_one_numa, static_cast<size_t>(_thread_nums_in_one_numa[numa_id]), thread_no_in_one_numa, start, end);
-        size_t n0_in_one_numa = start * 32;
-        size_t n1_in_one_numa = std::min(end * 32, _N_in_one_numa);
-        if (n0_in_one_numa >= _N_in_one_numa) return;
-        auto n0 = n0_in_one_numa + _N_in_one_numa * numa_id;
-        auto n1 = n1_in_one_numa + _N_in_one_numa * numa_id;
-        n1 = std::min(n1, N);
-        if (n0 >= n1) return;
+    auto work_amount_n_in_one_numa = _N_in_one_numa / 32;
+    if (M < 32) {
+        parallel_for(_thread_nums, [&](size_t id) {
+            auto numa_id = _thread_infos[id].numa_id;
+            auto thread_no_in_one_numa = _thread_infos[id].thread_no_in_one_numa;
+            size_t start, end;
+            splitter(work_amount_n_in_one_numa, static_cast<size_t>(_thread_nums_in_one_numa[numa_id]), thread_no_in_one_numa, start, end);
+            size_t n0_in_one_numa = start * 32;
+            size_t n1_in_one_numa = std::min(end * 32, _N_in_one_numa);
+            if (n0_in_one_numa >= _N_in_one_numa) return;
+            auto n0 = n0_in_one_numa + _N_in_one_numa * numa_id;
+            auto n1 = n1_in_one_numa + _N_in_one_numa * numa_id;
+            n1 = std::min(n1, N);
+            if (n0 >= n1) return;
 
-        auto weight = _weights[numa_id] + n0_in_one_numa * _K_align * get_precision_size(_create_param.dt_b);
-        fc_kernel_execute(_kernel[id], input.data<int8_t>(), weight, output.data<int8_t>(), input.stride(0),
-            output.stride(0), M, N, K, n0, n1, dq.data<float>(), q.data<float>(), bias.data<float>());
-    });
+            auto weight = _weights[numa_id] + n0_in_one_numa * _K_align * get_precision_size(_create_param.dt_b);
+            fc_kernel_execute(_kernel[id], input.data<int8_t>(), weight, output.data<int8_t>(), input.stride(0),
+                output.stride(0), M, N, K, n0, n1, dq.data<float>(), q.data<float>(), bias.data<float>());
+        });
+    } else {
+        // row number of each block
+        auto m_row = rndup(M, _m_block_num_idea) / _m_block_num_idea;
+        auto work_amount_n_block = _n_block_num_idea;
+        // at least 32 rows
+        if (m_row < 32) {
+            m_row = 32;
+            work_amount_n_block = work_amount_n_in_one_numa;
+        }
+        auto work_amount_m = rndup(M, m_row) / m_row;
+        auto work_amount = work_amount_n_block * work_amount_m;
+        auto n_block_in_one_numa = work_amount_n_in_one_numa / work_amount_n_block;
+        parallel_for(_thread_nums, [&](size_t id) {
+            auto numa_id = _thread_infos[id].numa_id;
+            auto thread_no_in_one_numa = _thread_infos[id].thread_no_in_one_numa;
+            size_t start, end;
+            splitter(work_amount, static_cast<size_t>(_thread_nums_in_one_numa[numa_id]), thread_no_in_one_numa, start, end);
+            size_t m_start{0}, n_start{0};
+            if (M > N)
+                parallel_it_init(start, m_start, work_amount_m, n_start, work_amount_n_block);
+            else
+                parallel_it_init(start, n_start, work_amount_n_block, m_start, work_amount_m);
+            for (auto work = start; work < end; work++) {
+                size_t n0_in_one_numa = n_start * n_block_in_one_numa * 32;
+                size_t n1_in_one_numa = n0_in_one_numa + n_block_in_one_numa * 32; //std::min(n_end * 32, _N_in_one_numa);
+                //if (n0_in_one_numa >= _N_in_one_numa) return;
+                auto n0 = n0_in_one_numa + _N_in_one_numa * numa_id;
+                auto n1 = n1_in_one_numa + _N_in_one_numa * numa_id;
+                n1 = std::min(n1, N);
+                if (n0 >= n1) continue;
+
+                size_t m0 = m_start * m_row;
+                size_t m1 = std::min(m0 + m_row, M);
+                size_t m = m1 - m0;
+
+                auto weight = _weights[numa_id] + n0_in_one_numa * _K_align * get_precision_size(_create_param.dt_b);
+                fc_kernel_execute(_kernel[id],
+                    input.data<int8_t>() + m0 * input.stride(0),
+                    weight,
+                    output.data<int8_t>() + m0 * output.stride(0),
+                    input.stride(0),
+                    output.stride(0),
+                    m, N, K, n0, n1,
+                    dq.data<float>(),
+                    q.data<float>(),
+                    bias.data<float>());
+                if (M > N)
+                    parallel_it_step(m_start, work_amount_m, n_start, work_amount_n_block);
+                else
+                    parallel_it_step(n_start, work_amount_n_block, m_start, work_amount_m);
+            }
+        });
+    }
 
     return status_t::status_ok;
 }
